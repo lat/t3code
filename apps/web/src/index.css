@@ -2641,73 +2641,88 @@ code {
   outline: none;
 }
 
-/* New thread hero: tint the glass blue so the dithered glow reads through it. */
+/* New thread hero and dashboard. Every tint derives from the theme's accent, so the
+   look follows the active appearance. */
+:root {
+  --home-accent: var(--app-theme-accent, var(--primary));
+}
+
 .dark [data-home-hero] [data-slot="composer-shell"] {
-  --chat-composer-glass-surface: rgb(14 22 62) !important;
-  --chat-composer-outline: rgb(120 150 255 / 22%) !important;
+  --chat-composer-glass-surface: color-mix(
+    in srgb,
+    var(--home-accent) 14%,
+    var(--background)
+  ) !important;
+  --chat-composer-outline: color-mix(in srgb, var(--home-accent) 22%, transparent) !important;
   --glass-opacity: 52%;
 }
 
 .dark [data-home-hero] [data-slot="composer-context-strip"],
 .dark body:has([data-home-hero]) [data-thread-details-card] {
-  background: rgb(12 18 50 / 55%) !important;
+  background: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--home-accent) 10%, var(--background)) 55%,
+    transparent
+  ) !important;
 }
 
 .dark body:has([data-home-hero]) [data-thread-details-card] {
   box-shadow:
-    inset 0 0 0 1px rgb(120 150 255 / 16%),
+    inset 0 0 0 1px color-mix(in srgb, var(--home-accent) 16%, transparent),
     0 20px 50px -12px rgb(0 0 0 / 70%);
 }
 
-/* New thread dashboard. Fixed colors: it always sits on the dithered glow. */
 [data-dither-glow-wash] {
   background: radial-gradient(
     ellipse 48% 50% at 50% 30%,
-    rgb(30 64 230 / 42%),
-    rgb(20 40 170 / 16%) 55%,
+    color-mix(in srgb, var(--home-accent) 34%, transparent),
+    color-mix(in srgb, var(--home-accent) 12%, transparent) 55%,
     transparent 100%
   );
 }
 
 [data-home-dashboard-card] {
-  border-color: rgb(120 150 255 / 16%);
-  background: rgb(8 11 28 / 62%);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 4%);
+  border-color: color-mix(in srgb, var(--home-accent) 16%, transparent);
+  background: color-mix(in srgb, var(--background) 62%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--foreground) 4%, transparent);
 }
 
 [data-pool-empty-band] {
-  background: rgb(244 63 94 / 20%);
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
 }
 
 [data-pool-refill-label] {
-  background: rgb(76 5 25 / 80%);
-  color: rgb(255 228 230);
+  background: color-mix(in srgb, var(--foreground) 22%, var(--background));
+  color: var(--foreground);
 }
 
 [data-activity-level="0"] {
-  background: rgb(255 255 255 / 9%);
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
 }
 
 [data-activity-level="1"],
 [data-activity-level="2"],
 [data-activity-level="3"],
 [data-activity-level="4"] {
-  background-image: radial-gradient(rgb(255 255 255 / 18%) 0.6px, transparent 0.8px);
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--foreground) 18%, transparent) 0.6px,
+    transparent 0.8px
+  );
   background-size: 3px 3px;
 }
 
 [data-activity-level="1"] {
-  background-color: #25357f;
+  background-color: color-mix(in srgb, var(--home-accent) 32%, var(--background));
 }
 
 [data-activity-level="2"] {
-  background-color: #3149c4;
+  background-color: color-mix(in srgb, var(--home-accent) 52%, var(--background));
 }
 
 [data-activity-level="3"] {
-  background-color: #4462ec;
+  background-color: color-mix(in srgb, var(--home-accent) 74%, var(--background));
 }
 
 [data-activity-level="4"] {
-  background-color: #7590ff;
+  background-color: var(--home-accent);
 }

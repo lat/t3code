@@ -4,7 +4,7 @@ import type { ScaleLinear } from "d3-scale"
 import { createContext, use, useCallback, useMemo, useState } from "react"
 import type { CommonChart } from "./common-context"
 import type { BloomInput } from "./dither-paint"
-import type { DitherColor, Seed } from "./palette"
+import type { Seed, SeriesColor } from "./palette"
 import { seedOfColor } from "./palette"
 import {
   buildBandScale,
@@ -20,7 +20,7 @@ import type { Dimensions } from "./use-chart-dimensions"
 /** Which chart root a part is composed under — drives the boundary guards. */
 export type ChartType = "area" | "bar" | "line" | "pie" | "radar"
 
-export type ChartConfig = Record<string, { label?: string; color: DitherColor }>
+export type ChartConfig = Record<string, { label?: string; color: SeriesColor }>
 
 export type Margins = {
   top: number

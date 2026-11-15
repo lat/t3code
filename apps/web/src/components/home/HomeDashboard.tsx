@@ -21,6 +21,7 @@ import { Tooltip } from "../dither-kit/tooltip";
 import { Skeleton } from "../ui/skeleton";
 import { Tooltip as UiTooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PROVIDER_PRESENTATION } from "../usage/usageProviders";
+import { ACCENT_VARIABLES, parseRgbKey, type Rgb, useThemeRgbKey } from "./useThemeRgb";
 import {
   type ActivityGrid,
   buildActivityGrid,
@@ -113,9 +114,11 @@ function PoolChart({
   from,
   to,
   now,
+  color,
   formatMoment,
 }: {
   readonly forecast: PoolForecast;
+  readonly color: Rgb;
   readonly from: number;
   readonly to: number;
   readonly now: number;
@@ -149,7 +152,7 @@ function PoolChart({
         </span>
         <AreaChart
           data={data}
-          config={{ remaining: { label: "Left", color: "indigo" } }}
+          config={{ remaining: { label: "Left", color } }}
           margins={{ top: 4, right: 0, bottom: 0, left: 0 }}
           className="absolute inset-0"
         >
@@ -202,9 +205,11 @@ function PoolCard({
   pool,
   usage,
   now,
+  color,
   formatMoment,
 }: {
   readonly label: string;
+  readonly color: Rgb;
   readonly pool: ReturnType<typeof collectLimitPools>[number] | undefined;
   readonly usage: readonly DayTokens[];
   readonly now: number;
@@ -252,6 +257,7 @@ function PoolCard({
               from={from}
               to={to}
               now={now}
+              color={color}
               formatMoment={formatMoment}
             />
           </div>
@@ -450,6 +456,7 @@ export function HomeDashboard() {
     reportFailure: false,
   });
   const formatMoment = useMomentFormat();
+  const accentKey = useThemeRgbKey(ACCENT_VARIABLES, "#5c76fa");
 
   const refreshLimits = useEffectEvent(() => {
     for (const [environmentId, presentation] of presentations) {
@@ -484,6 +491,7 @@ export function HomeDashboard() {
           pool={pools.find((pool) => pool.driver === (driver as ServerProvider["driver"]))}
           usage={tokensOf(provider)}
           now={now}
+          color={parseRgbKey(accentKey)}
           formatMoment={formatMoment}
         />
       ))}

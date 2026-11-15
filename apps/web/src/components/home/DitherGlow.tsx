@@ -2,15 +2,27 @@ import { useLayoutEffect, useRef } from "react";
 
 import { BAYER4 } from "../dither-kit/pixel";
 import { observeResize } from "../../lib/observeResize";
+import {
+  ACCENT_VARIABLES,
+  parseRgbKey,
+  type Rgb,
+  TEXT_VARIABLES,
+  useThemeRgbKey,
+} from "./useThemeRgb";
 
 const CELL_PX = 3;
 const MAX_COLS = 900;
 const MAX_ROWS = 600;
-// Ordered-dither cells blend from deep blue at the rim to a pale periwinkle core.
-const RIM = [36, 74, 255] as const;
-const CORE = [168, 188, 255] as const;
+// Ordered-dither cells blend from a dimmed accent at the rim to the text color at the core.
+const RIM_SHADE = 0.75;
 
-function paintGlow(canvas: HTMLCanvasElement, width: number, height: number) {
+function paintGlow(
+  canvas: HTMLCanvasElement,
+  width: number,
+  height: number,
+  accent: Rgb,
+  text: Rgb,
+) {
   const context = canvas.getContext("2d");
   if (!context || width <= 0 || height <= 0) return;
   const cols = Math.min(MAX_COLS, Math.max(8, Math.round(width / CELL_PX)));
@@ -18,6 +30,8 @@ function paintGlow(canvas: HTMLCanvasElement, width: number, height: number) {
   canvas.width = cols;
   canvas.height = rows;
   const image = context.createImageData(cols, rows);
+  const rim = accent.map((channel) => channel * RIM_SHADE);
+  const core = text.map((channel, index) => (channel + accent[index]!) / 2);
   const centerX = cols / 2;
   // The glow sits behind the headline and composer, above the dashboard.
   const centerY = rows * 0.3;
@@ -32,31 +46,35 @@ function paintGlow(canvas: HTMLCanvasElement, width: number, height: number) {
       if (density <= 0.002) continue;
       const lit = density * 0.9 > BAYER4[y & 3]![x & 3]!;
       const alpha = lit ? 0.22 + 0.6 * density : 0.1 * density;
-      const core = density ** 2;
+      const blend = density ** 2;
       const offset = (y * cols + x) * 4;
-      image.data[offset] = RIM[0] + (CORE[0] - RIM[0]) * core;
-      image.data[offset + 1] = RIM[1] + (CORE[1] - RIM[1]) * core;
-      image.data[offset + 2] = RIM[2] + (CORE[2] - RIM[2]) * core;
+      for (let channel = 0; channel < 3; channel += 1) {
+        image.data[offset + channel] = rim[channel]! + (core[channel]! - rim[channel]!) * blend;
+      }
       image.data[offset + 3] = Math.round(alpha * 255);
     }
   }
   context.putImageData(image, 0, 0);
 }
 
-/** Static ordered-dither glow behind the new thread hero. Repaints only on resize. */
+/** Static ordered-dither glow behind the new thread hero, in the theme's accent. */
 export function DitherGlow() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- paints the canvas from its measured size and repaints through a ResizeObserver
+  const accentKey = useThemeRgbKey(ACCENT_VARIABLES, "#4a68f0");
+  const textKey = useThemeRgbKey(TEXT_VARIABLES, "#f2f4fa");
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- paints the canvas from its measured size and theme colors, repainting through a ResizeObserver
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const accent = parseRgbKey(accentKey);
+    const text = parseRgbKey(textKey);
     const paint = () => {
       const box = canvas.getBoundingClientRect();
-      paintGlow(canvas, box.width, box.height);
+      paintGlow(canvas, box.width, box.height, accent, text);
     };
     paint();
     return observeResize(canvas, paint);
-  }, []);
+  }, [accentKey, textKey]);
   return (
     <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
       <div data-dither-glow-wash className="absolute inset-0" />
