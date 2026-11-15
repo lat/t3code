@@ -368,6 +368,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["latex tex katex equations formulas markdown"],
   },
   {
+    id: "home-dashboard",
+    title: "New thread dashboard",
+    to: "/settings/appearance",
+    searchTerms: ["usage limits pool activity heatmap tokens cost home draft new thread cards"],
+  },
+  {
     id: "panel-animations",
     title: "Panel animations",
     to: "/settings/appearance",

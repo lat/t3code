@@ -460,6 +460,9 @@ export interface LimitPoolWindow {
   readonly kind: ServerProviderUsageWindow["kind"];
   readonly label: string;
   readonly members: readonly LimitPoolMember[];
+  /** Plan weight per member, aligned with `members`; the pool holds `100 * capacity` percent. */
+  readonly weights: readonly number[];
+  readonly capacity: number;
   readonly columns: ReadonlyArray<
     LimitPoolMember | { readonly account: LimitAccount; readonly window: null }
   >;
@@ -693,6 +696,8 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
       kind: first.kind,
       label: first.label,
       members,
+      weights,
+      capacity: totalWeight,
       columns: accounts.map(
         (account) => memberByAccount.get(account.key) ?? { account, window: null },
       ),

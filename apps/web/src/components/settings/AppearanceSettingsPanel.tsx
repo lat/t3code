@@ -348,6 +348,31 @@ export function AppearanceSettingsPanel() {
             />
           }
         />
+        <SettingsRow
+          {...searchableSetting("home-dashboard")}
+          description="Show subscription pools, activity, and usage under the composer on a new thread."
+          resetAction={
+            settings.homeDashboardEnabled !== DEFAULT_UNIFIED_SETTINGS.homeDashboardEnabled ? (
+              <SettingResetButton
+                label="new thread dashboard"
+                onClick={() =>
+                  updateSettings({
+                    homeDashboardEnabled: DEFAULT_UNIFIED_SETTINGS.homeDashboardEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.homeDashboardEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ homeDashboardEnabled: Boolean(checked) })
+              }
+              aria-label="Show new thread dashboard"
+            />
+          }
+        />
         <AdvancedSettings
           targetIds={[
             searchableSetting("panel-animations").id,

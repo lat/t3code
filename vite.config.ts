@@ -180,6 +180,8 @@ export default defineConfig({
     ignorePatterns: [
       ".repos/**",
       "infra/task-cache/vendor/**",
+      // Vendored Dither Kit registry source, kept close to upstream.
+      "apps/web/src/components/dither-kit/**",
       // Macroscope requires one glob per line; Markdown formatting corrupts it.
       ".macroscope/ignore.md",
       ".alchemy",
@@ -216,6 +218,7 @@ export default defineConfig({
       ".repos",
       ".repos/**",
       "infra/task-cache/vendor/**",
+      "apps/web/src/components/dither-kit/**",
       "dist",
       "dist-electron",
       "node_modules",

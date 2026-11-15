@@ -284,6 +284,8 @@ import {
 import { useEnvironmentShellHasSnapshot } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
+import { DitherGlow } from "./home/DitherGlow";
+import { HomeDashboard } from "./home/HomeDashboard";
 import { ExpandedImageDialogHost, openExpandedImagePreview } from "./chat/ExpandedImageDialog";
 import {
   BranchRestoreConfirmHost,
@@ -1639,6 +1641,8 @@ export default function ChatView(props: ChatViewProps) {
     backgroundSubmissionPending,
     hasWorktreeSetupCard: worktreeSetup !== null,
   });
+  const homeDashboardEnabled = useClientSettings((settings) => settings.homeDashboardEnabled);
+  const showHomeDashboard = isDraftHeroState && homeDashboardEnabled && !embedded;
   const {
     transitionGroupRef: draftHeroTransitionGroupRef,
     composerAnchorRef: draftHeroComposerAnchorRef,
@@ -3431,6 +3435,7 @@ export default function ChatView(props: ChatViewProps) {
               {...conversationArea}
               className="relative flex min-h-0 flex-1 flex-col bg-background"
             >
+              {showHomeDashboard ? <DitherGlow /> : null}
               <WorkspaceMutationIdContext value={workspaceMutationId}>
                 <ThreadTimeline
                   pendingApprovals={pendingApprovals}
@@ -3555,6 +3560,7 @@ export default function ChatView(props: ChatViewProps) {
               }}
               inert={isRevertingCheckpoint}
               data-chat-composer-overlay="true"
+              data-home-hero={showHomeDashboard ? "" : undefined}
               className={
                 isDraftHeroState
                   ? "pointer-events-none absolute inset-0 z-20 flex items-center [@media(max-height:34rem)]:items-end"
@@ -3852,7 +3858,12 @@ export default function ChatView(props: ChatViewProps) {
                         // Out of flow, like the headline, so a notice never moves the centered composer.
                         // Short windows pin the composer to the bottom, where an out-of-flow notice
                         // would fall off-screen, so there it takes space and lifts the composer.
-                        <div className="absolute inset-x-0 top-full flex flex-col gap-1 pt-4 [@media(max-height:34rem)]:static">
+                        <div
+                          className={cn(
+                            "absolute inset-x-0 top-full flex flex-col gap-1 pt-4 [@media(max-height:34rem)]:static",
+                            showHomeDashboard && "sm:[@media(min-height:50rem)]:static",
+                          )}
+                        >
                           <ComposerBannerStack items={composerBannerItems} detached />
                         </div>
                       ) : null}
@@ -3863,6 +3874,12 @@ export default function ChatView(props: ChatViewProps) {
                     />
                   </div>
                 </div>
+                {showHomeDashboard ? (
+                  // Outside the composer stack so its height never counts as composer height.
+                  <div className="pointer-events-auto mx-auto hidden w-full max-w-(--chat-content-max-width) sm:[@media(min-height:50rem)]:block">
+                    <HomeDashboard />
+                  </div>
+                ) : null}
               </div>
             </div>
 
