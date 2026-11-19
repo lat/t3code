@@ -8,6 +8,36 @@ Your chats, settings, themes, keybindings and project scripts live in `~/.t3/use
 this repository, so rebuilding or reinstalling never touches them. The one real risk is that a
 newer build can upgrade the database so an older build can't read it. That's why you back up first.
 
+## The quick way: `t3update`
+
+Open Terminal or Ghostty (not a terminal inside T3) and run:
+
+```sh
+t3update
+```
+
+`t3update` is an alias in `~/.zshrc` for `~/Code/t3code/scripts/update-fork.sh`. It does every
+step below in order and asks before anything you'd want a say in:
+
+1. Merges the official changes, installs dependencies and runs the checks.
+2. Asks whether to try the build in a dev window first. Press Enter to skip.
+3. Builds the app, which takes several minutes.
+4. Asks to quit T3, pauses the background service, then backs up `~/.t3/userdata` to
+   `~/t3-backup-<date>`.
+5. Installs the new app straight from the DMG, so there's nothing to drag. Then it reopens T3,
+   updates the background service to the new version and pushes to your GitHub fork.
+
+If you run it inside T3, it can't quit T3 without stopping itself. It stops after the build and
+copies `~/Code/t3code/scripts/update-fork.sh install` to your clipboard. Quit T3 and paste that
+into Terminal; `install` does only step 4 onward.
+
+If the merge has conflicts, it stops and lists them. Fix them (see below), `git add` the files and
+run `t3update` again; it finishes the merge and carries on. `t3update --help` lists the options,
+such as `--skip-checks`, `--build-only` and `--no-push`. The script lives on `ui/home-dashboard`,
+so run it with that branch checked out.
+
+The rest of this guide is what the script does, in case you need to do a step by hand.
+
 ## Steps 1–3: safe while T3 is open
 
 These don't touch your data.
@@ -33,17 +63,27 @@ vp run dist:desktop:dmg:arm64
 afterwards ends up in the commit. If an editor does open, leave the text as it is and save and
 close (vim: `:wq`, nano: Ctrl-O, Enter, Ctrl-X).
 
-## Steps 4–6: quit T3 first
+## Steps 4–7: quit T3 first
 
 ```sh
-# 4. Quit T3 Code (Beta) completely, then back up
+# 4. Quit T3 Code (Beta) completely, then pause the background service
+launchctl bootout gui/$(id -u)/com.t3tools.t3code.service
+
+# 5. Back up
 cp -R ~/.t3/userdata ~/t3-backup-$(date +%F)
 
-# 5. Open release/T3-Code-*-arm64.dmg and drag "T3 Code (Beta)" into Applications, replacing the old one
+# 6. Open release/T3-Code-*-arm64.dmg and drag "T3 Code (Beta)" into Applications, replacing the old one
 
-# 6. Push the merge to your GitHub fork
-git -c credential.helper='!gh auth git-credential' push
+# 7. Open T3, then update the background service to the new version and push the merge
+~/.t3/bin/t3 service install
+git -c credential.helper= -c credential.helper='!gh auth git-credential' push
 ```
+
+**Why step 4 matters:** the background service (`com.t3tools.t3code.service`) starts its own
+server on `~/.t3/userdata` as soon as the app quits. Left running, it writes to the database while
+you copy it, and it runs whatever T3 version it was installed with, which can be older than the
+new app. `t3 service install` in step 7 brings it back on the new version. Run it after T3 is
+open so the app claims your data first. `t3 service status` shows whether it needs an update.
 
 The backup is several GB. Keep it until the new build has worked for a few days. If macOS blocks
 the new app, right-click it and choose **Open**.
@@ -70,14 +110,17 @@ the browser, then push again:
 gh auth refresh -h github.com -s workflow
 ```
 
-**The new build is broken.** Quit T3, then put the backup back:
+**The new build is broken.** Quit T3, pause the background service, then put the backup back:
 
 ```sh
+launchctl bootout gui/$(id -u)/com.t3tools.t3code.service
 mv ~/.t3/userdata ~/.t3/userdata-broken
 cp -R ~/t3-backup-YYYY-MM-DD ~/.t3/userdata
 ```
 
-Then reinstall the previous DMG, or run `git reset --hard ORIG_HEAD` right after a bad merge and
+Then reinstall the previous DMG (older ones stay in `release/`), open T3 and run
+`~/.t3/bin/t3 service install`. To drop a bad merge instead, run the `git reset --hard …` command
+`t3update` printed after merging (or `git reset --hard ORIG_HEAD` right after a manual merge) and
 rebuild. Delete `~/.t3/userdata-broken` once everything works.
 
 ## Going back to the official app
