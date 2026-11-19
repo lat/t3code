@@ -19,13 +19,17 @@ t3update
 `t3update` is an alias in `~/.zshrc` for `~/Code/t3code/scripts/update-fork.sh`. It does every
 step below in order and asks before anything you'd want a say in:
 
-1. Merges the official changes, installs dependencies and runs the checks.
+1. Merges the official changes, installs dependencies and runs the checks. If the only failure is
+   the ChatView "rightPanelOpen" test, which also fails on the official version, it carries on;
+   any other failure asks whether to continue.
 2. Asks whether to try the build in a dev window first. Press Enter to skip.
 3. Builds the app, which takes several minutes.
 4. Asks to quit T3, pauses the background service, then backs up `~/.t3/userdata` to
    `~/.t3-backups/<date>`.
 5. Installs the new app straight from the DMG, so there's nothing to drag. Then it reopens T3,
    updates the background service to the new version and pushes to your GitHub fork.
+6. Deletes the oldest backups so only the two newest remain: the data from before this update and
+   from before the previous one.
 
 If you run it inside T3, it can't quit T3 without stopping itself. It stops after the build and
 copies `~/Code/t3code/scripts/update-fork.sh install` to your clipboard. Quit T3 and paste that
@@ -85,7 +89,8 @@ you copy it, and it runs whatever T3 version it was installed with, which can be
 new app. `t3 service install` in step 7 brings it back on the new version. Run it after T3 is
 open so the app claims your data first. `t3 service status` shows whether it needs an update.
 
-The backup is several GB. Keep it until the new build has worked for a few days. Backups live in
+The backup is several GB. Keep it until the new build has worked for a few days; `t3update` keeps
+the two newest and deletes older ones. Backups live in
 `~/.t3-backups`, a hidden folder; in Finder, press Cmd-Shift-. to show hidden files. If macOS blocks
 the new app, right-click it and choose **Open**.
 

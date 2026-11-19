@@ -16,6 +16,9 @@ NIGHTLY_NAME="T3 Code (Nightly)"
 USERDATA="$HOME/.t3/userdata"
 DEV_HOME="$REPO/.t3"
 BACKUPS="$HOME/.t3-backups"
+KEEP_BACKUPS=2   # after a successful install, older backups beyond this many are deleted
+# A browser test that also fails on unmodified upstream. If it's the only failure, the checks count as passed.
+KNOWN_FAILURE="a shortcut conditioned on rightPanelOpen"
 SERVICE_LABEL="com.t3tools.t3code.service"
 SERVICE_PLIST="$HOME/Library/LaunchAgents/$SERVICE_LABEL.plist"
 SELF="$REPO/scripts/update-fork.sh"
@@ -56,6 +59,35 @@ app_running() {
   grep -qF "/$1.app/Contents/MacOS/" <<<"$procs"
 }
 service_loaded() { launchctl print "gui/$(id -u)/$SERVICE_LABEL" >/dev/null 2>&1; }
+
+# True when the check:changed log in $1 failed only because of $KNOWN_FAILURE:
+# one failed step, one failed test, no timeouts or unhandled errors, and that test is the known one.
+only_known_failure() {
+  local text summary failed_steps failed_tests
+  text="$(sed $'s/\x1b\\[[0-9;?]*[A-Za-z]//g' "$1")"
+  summary="$(sed -n '/check:changed summary/,$p' <<<"$text")"
+  [ -n "$summary" ] || return 1
+  grep -q 'TIMEOUT' <<<"$summary" && return 1
+  failed_steps="$(grep -cE '^ +FAIL ' <<<"$summary" || true)"
+  [ "$failed_steps" = 1 ] || return 1
+  failed_tests="$(grep -oE 'Tests +[0-9]+ failed' <<<"$text" | grep -oE '[0-9]+' | awk '{s += $1} END {print s + 0}')"
+  [ "$failed_tests" = 1 ] || return 1
+  grep -qE '^ *Errors +[0-9]+ error' <<<"$text" && return 1
+  grep -qF "$KNOWN_FAILURE" <<<"$text"
+}
+
+# Delete the oldest backups so only the newest $KEEP_BACKUPS remain. Names are dates, so they sort in order.
+prune_backups() {
+  local all count d size
+  all="$(ls -1d "$BACKUPS"/20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]* 2>/dev/null | sort || true)"
+  count="$(grep -c . <<<"$all" || true)"
+  [ "$count" -gt "$KEEP_BACKUPS" ] || return 0
+  head -n "$((count - KEEP_BACKUPS))" <<<"$all" | while read -r d; do
+    size="$(du -sh "$d" | awk '{print $1}')"
+    rm -rf "$d"
+    ok "Deleted the oldest backup, $(basename "$d") ($size)"
+  done
+}
 
 # PIDs of processes holding the T3 database or its ownership lock (server-owner.sqlite).
 db_holders() {
@@ -188,15 +220,21 @@ EOF
 
   if [ "$SKIP_CHECKS" = 0 ]; then
     step "Running checks (vp run check:changed)"
-    if vp run check:changed; then
+    local log
+    log="$(mktemp)"
+    if FORCE_COLOR=1 vp run check:changed 2>&1 | tee "$log"; then
       ok "Checks passed"
+    elif only_known_failure "$log"; then
+      ok "Checks passed, apart from the ChatView 'rightPanelOpen' test that also fails upstream"
     else
-      warn "Checks failed. (A ChatView 'rightPanelOpen' browser test also fails on unmodified upstream.)"
+      warn "Checks failed."
       if ! ask "Continue anyway?" n; then
         [ -n "${PRE_MERGE:-}" ] && info "To undo the merge: git reset --hard ${PRE_MERGE:0:10}"
+        rm -f "$log"
         exit 1
       fi
     fi
+    rm -f "$log"
   fi
 
   if [ "$DEV" = yes ] || { [ "$DEV" = ask ] && ask "Try it in a dev window first (uses a copy of your data)?" n; }; then
@@ -363,13 +401,9 @@ EOF
     fi
   fi
 
-  local old
-  old="$(ls -d "$BACKUPS"/* 2>/dev/null | grep -vxF "$backup" || true)"
-  printf '\n%s✓ Done.%s Keep %s until the new build has worked for a few days.\n' "$GRN$B" "$R" "$backup"
-  if [ -n "$old" ]; then
-    info "Older backups you can delete when you're confident:"
-    printf '%s\n' "$old" | while read -r d; do info "  $(du -sh "$d" | cut -f1)  $d"; done
-  fi
+  prune_backups
+  printf '\n%s✓ Done.%s Your data from before this update is in %s.\n' "$GRN$B" "$R" "$backup"
+  info "Only the $KEEP_BACKUPS newest backups are kept; older ones are deleted after each update."
   info "If the new build is broken, see 'If something goes wrong' in FORK.md."
 }
 
