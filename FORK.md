@@ -23,7 +23,7 @@ step below in order and asks before anything you'd want a say in:
 2. Asks whether to try the build in a dev window first. Press Enter to skip.
 3. Builds the app, which takes several minutes.
 4. Asks to quit T3, pauses the background service, then backs up `~/.t3/userdata` to
-   `~/t3-backup-<date>`.
+   `~/.t3-backups/<date>`.
 5. Installs the new app straight from the DMG, so there's nothing to drag. Then it reopens T3,
    updates the background service to the new version and pushes to your GitHub fork.
 
@@ -70,7 +70,7 @@ close (vim: `:wq`, nano: Ctrl-O, Enter, Ctrl-X).
 launchctl bootout gui/$(id -u)/com.t3tools.t3code.service
 
 # 5. Back up
-cp -R ~/.t3/userdata ~/t3-backup-$(date +%F)
+mkdir -p ~/.t3-backups && cp -R ~/.t3/userdata ~/.t3-backups/$(date +%F)
 
 # 6. Open release/T3-Code-*-arm64.dmg and drag "T3 Code (Beta)" into Applications, replacing the old one
 
@@ -85,7 +85,8 @@ you copy it, and it runs whatever T3 version it was installed with, which can be
 new app. `t3 service install` in step 7 brings it back on the new version. Run it after T3 is
 open so the app claims your data first. `t3 service status` shows whether it needs an update.
 
-The backup is several GB. Keep it until the new build has worked for a few days. If macOS blocks
+The backup is several GB. Keep it until the new build has worked for a few days. Backups live in
+`~/.t3-backups`, a hidden folder; in Finder, press Cmd-Shift-. to show hidden files. If macOS blocks
 the new app, right-click it and choose **Open**.
 
 ## Rules that keep your data safe
@@ -115,7 +116,7 @@ gh auth refresh -h github.com -s workflow
 ```sh
 launchctl bootout gui/$(id -u)/com.t3tools.t3code.service
 mv ~/.t3/userdata ~/.t3/userdata-broken
-cp -R ~/t3-backup-YYYY-MM-DD ~/.t3/userdata
+cp -R ~/.t3-backups/YYYY-MM-DD ~/.t3/userdata
 ```
 
 Then reinstall the previous DMG (older ones stay in `release/`), open T3 and run

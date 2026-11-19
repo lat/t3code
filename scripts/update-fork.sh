@@ -15,6 +15,7 @@ APP_PATH="/Applications/$APP_NAME.app"
 NIGHTLY_NAME="T3 Code (Nightly)"
 USERDATA="$HOME/.t3/userdata"
 DEV_HOME="$REPO/.t3"
+BACKUPS="$HOME/.t3-backups"
 SERVICE_LABEL="com.t3tools.t3code.service"
 SERVICE_PLIST="$HOME/Library/LaunchAgents/$SERVICE_LABEL.plist"
 SELF="$REPO/scripts/update-fork.sh"
@@ -314,8 +315,9 @@ EOF
   avail="$(df -k "$HOME" | awk 'NR==2 {print $4}')"
   [ "$avail" -gt $((need + 5 * 1024 * 1024)) ] \
     || die "Not enough free disk space for a backup ($((need / 1024 / 1024)) GB needed, plus 5 GB to spare)."
-  backup="$HOME/t3-backup-$(date +%F)"
-  [ -e "$backup" ] && backup="$HOME/t3-backup-$(date +%F-%H%M%S)"
+  mkdir -p "$BACKUPS"
+  backup="$BACKUPS/$(date +%F)"
+  [ -e "$backup" ] && backup="$BACKUPS/$(date +%F-%H%M%S)"
   info "Copying $((need / 1024 / 1024)) GB to $backup …"
   cp -R "$USERDATA" "$backup"
   ok "Backed up to $backup"
@@ -362,7 +364,7 @@ EOF
   fi
 
   local old
-  old="$(ls -d "$HOME"/t3-backup-* 2>/dev/null | grep -vxF "$backup" || true)"
+  old="$(ls -d "$BACKUPS"/* 2>/dev/null | grep -vxF "$backup" || true)"
   printf '\n%s✓ Done.%s Keep %s until the new build has worked for a few days.\n' "$GRN$B" "$R" "$backup"
   if [ -n "$old" ]; then
     info "Older backups you can delete when you're confident:"
