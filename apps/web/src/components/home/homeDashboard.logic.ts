@@ -208,6 +208,68 @@ export function primaryPoolWindow(pool: LimitPool): LimitPoolWindow | null {
   );
 }
 
+/**
+ * The window of the primary kind closest to running out, for pools that meter several quotas of
+ * one kind side by side (Antigravity's per-family weekly buckets).
+ */
+export function tightestPoolWindow(pool: LimitPool): LimitPoolWindow | null {
+  const primary = primaryPoolWindow(pool);
+  if (!primary) return null;
+  const usedOf = (window: LimitPoolWindow) =>
+    window.members.reduce(
+      (sum, member, index) => sum + (window.weights[index] ?? 1) * member.window.usedPercent,
+      0,
+    ) / Math.max(1, window.capacity);
+  return pool.windows
+    .filter((window) => window.kind === primary.kind)
+    .reduce((tightest, window) => (usedOf(window) > usedOf(tightest) ? window : tightest), primary);
+}
+
+export interface SpendForecast {
+  /** Local midnight starting the month, and the next month's. */
+  readonly from: number;
+  readonly to: number;
+  readonly points: readonly { readonly at: number; readonly spent: number }[];
+  readonly spentUsd: number;
+  readonly projectedUsd: number;
+  readonly paceUsdPerDay: number;
+}
+
+/**
+ * Month-to-date spend, cumulative, carried to the month's end at the last week's daily pace.
+ * Each day's cost is spread evenly across the day, like {@link tokensBetween}.
+ */
+export function forecastSpend(input: {
+  readonly cost: readonly DayTokens[];
+  readonly now: number;
+  readonly stepMs?: number;
+}): SpendForecast {
+  const { cost, now } = input;
+  const stepMs = input.stepMs ?? 6 * HOUR_MS;
+  const today = localDay(now);
+  const from = dayStart(`${today.slice(0, 8)}01`);
+  const nextMonth = new Date(from);
+  nextMonth.setMonth(nextMonth.getMonth() + 1);
+  const to = nextMonth.getTime();
+  const spentUsd = tokensBetween(cost, from, now, now);
+  const paceLookbackMs = 7 * DAY_MS;
+  const paceUsdPerDay =
+    (tokensBetween(cost, now - paceLookbackMs, now, now) / paceLookbackMs) * DAY_MS;
+  const spentAt = (at: number) =>
+    at <= now
+      ? tokensBetween(cost, from, at, now)
+      : spentUsd + (paceUsdPerDay * (at - now)) / DAY_MS;
+
+  const points: { at: number; spent: number }[] = [];
+  for (let at = from; at < to; at += stepMs) {
+    if (at > now && points.at(-1)!.at < now) points.push({ at: now, spent: spentUsd });
+    points.push({ at, spent: spentAt(at) });
+  }
+  if (points.at(-1)!.at < now) points.push({ at: now, spent: spentUsd });
+  points.push({ at: to, spent: spentAt(to) });
+  return { from, to, points, spentUsd, projectedUsd: spentAt(to), paceUsdPerDay };
+}
+
 export interface ActivityCell {
   readonly day: string;
   readonly tokens: number;

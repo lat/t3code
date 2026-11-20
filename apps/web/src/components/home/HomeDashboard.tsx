@@ -4,7 +4,8 @@ import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
 import { formatTokens, makeWindow } from "@t3tools/shared/usageFormat";
 import { collectLimitAccounts, collectLimitPools } from "@t3tools/shared/usageLimits";
 import { scaleLinear } from "d3-scale";
-import { CalendarIcon, ChartLineIcon, GaugeIcon } from "lucide-react";
+import { T, useGT, Var } from "gt-react";
+import { CalendarIcon, ChartLineIcon, CircleDollarSignIcon, GaugeIcon } from "lucide-react";
 import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
@@ -16,41 +17,54 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { resolveHour12 } from "../../timestampFormat";
 import { Area } from "../dither-kit/area";
 import { AreaChart } from "../dither-kit/area-chart";
-import type { DitherColor } from "../dither-kit/palette";
+import type { DitherColor, SeriesColor } from "../dither-kit/palette";
 import { Tooltip } from "../dither-kit/tooltip";
 import { Skeleton } from "../ui/skeleton";
 import { Tooltip as UiTooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PROVIDER_PRESENTATION } from "../usage/usageProviders";
-import { ACCENT_VARIABLES, parseRgbKey, type Rgb, useThemeRgbKey } from "./useThemeRgb";
 import {
   type ActivityGrid,
+  addDays,
   buildActivityGrid,
   buildMonthUsage,
   type DayTokens,
   dayStart,
   forecastPool,
+  forecastSpend,
   formatCompactUsd,
   formatPoolPercent,
   localDay,
   type MonthUsage,
   type PoolForecast,
+  type SpendForecast,
   poolForecastMembers,
   primaryPoolWindow,
+  tightestPoolWindow,
 } from "./homeDashboard.logic";
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
-const ACTIVITY_WEEKS = 20;
+// A quarter fits a third of the dashboard at readable cell sizes.
+const ACTIVITY_WEEKS = 13;
 const POOL_HISTORY_MS = 3 * DAY_MS;
 const POOL_FORECAST_MS = 3 * DAY_MS;
 
+// Each pool charts in its provider's series color, as in the Usage legend.
 const POOLS = [
   { driver: "codex", provider: "codex", label: "Codex" },
   { driver: "claudeAgent", provider: "claude", label: "Claude" },
+  // Antigravity meters each model family separately; chart whichever weekly quota binds first.
+  {
+    driver: "antigravity",
+    provider: "antigravity",
+    label: "Antigravity",
+    tightest: true,
+  },
 ] as const satisfies readonly {
   driver: string;
   provider: UsageProviderKind;
   label: string;
+  tightest?: boolean;
 }[];
 
 const SERIES_COLOR: Record<UsageProviderKind, DitherColor> = {
@@ -83,7 +97,7 @@ function DashboardCard({
       data-home-dashboard-card
       className="flex min-w-0 flex-col gap-3 rounded-xl border p-4 backdrop-blur-md"
     >
-      <header className="flex min-w-0 items-center justify-between gap-3 text-sm">
+      <header className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
         <h2 className="flex min-w-0 items-center gap-2 font-medium text-foreground/90">
           <span className="shrink-0 text-muted-foreground [&_svg]:size-4">{icon}</span>
           <span className="truncate">{title}</span>
@@ -109,6 +123,93 @@ function useMomentFormat() {
   return (at: number) => format.format(at);
 }
 
+interface ChartTick {
+  readonly at: number;
+  readonly label: string;
+  readonly align?: "start" | "center" | "end";
+}
+
+/** A series over `[from, to]` with the future past `now` shaded, like the pool and spend cards. */
+function ForecastChart({
+  points,
+  from,
+  to,
+  now,
+  color,
+  seriesLabel,
+  ticks,
+  formatMoment,
+  formatValue,
+  children,
+}: {
+  readonly points: readonly { readonly at: number; readonly value: number }[];
+  readonly from: number;
+  readonly to: number;
+  readonly now: number;
+  readonly color: SeriesColor;
+  readonly seriesLabel: string;
+  readonly ticks: readonly ChartTick[];
+  readonly formatMoment: (at: number) => string;
+  readonly formatValue: (value: number) => string;
+  /** Overlays positioned over the chart, such as the pool's empty band. */
+  readonly children?: ReactNode;
+}) {
+  const span = to - from;
+  const at = (time: number) => `${((time - from) / span) * 100}%`;
+  const data = points.map((point) => ({ label: formatMoment(point.at), value: point.value }));
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="relative h-24">
+        <span
+          className="pointer-events-none absolute -top-4 -translate-x-1/2 text-3xs tracking-wider text-muted-foreground uppercase"
+          style={{ left: at(now) }}
+        >
+          <T>Now</T>
+        </span>
+        <AreaChart
+          data={data}
+          config={{ value: { label: seriesLabel, color } }}
+          margins={{ top: 4, right: 0, bottom: 0, left: 0 }}
+          className="absolute inset-0"
+        >
+          <Tooltip labelKey="label" variant="frosted-glass" valueFormatter={formatValue} />
+          <Area dataKey="value" variant="dotted" />
+        </AreaChart>
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 right-0 bg-black/35"
+          style={{ left: at(now) }}
+        />
+        {children}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 w-px bg-foreground/45"
+          style={{ left: at(now) }}
+        />
+      </div>
+      <div className="relative h-3 text-3xs tracking-wider text-muted-foreground uppercase">
+        {ticks.map((tick) => (
+          <span
+            key={tick.at}
+            className={cn(
+              "absolute whitespace-nowrap",
+              tick.align === "start"
+                ? ""
+                : tick.align === "end"
+                  ? "-translate-x-full"
+                  : "-translate-x-1/2",
+            )}
+            style={{ left: at(tick.at) }}
+          >
+            {tick.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PoolChart({
   forecast,
   from,
@@ -118,85 +219,56 @@ function PoolChart({
   formatMoment,
 }: {
   readonly forecast: PoolForecast;
-  readonly color: Rgb;
+  readonly color: SeriesColor;
   readonly from: number;
   readonly to: number;
   readonly now: number;
   readonly formatMoment: (at: number) => string;
 }) {
+  const gt = useGT();
   const span = to - from;
-  const at = (time: number) => `${((time - from) / span) * 100}%`;
-  const data = forecast.points.map((point) => ({
-    label: formatMoment(point.at),
-    remaining: Math.round(point.remaining),
-  }));
-  const days: { at: number; label: string }[] = [];
+  const days: ChartTick[] = [];
   const weekday = new Intl.DateTimeFormat(undefined, { weekday: "short" });
-  for (let day = localDay(from); dayStart(day) < to;) {
+  for (let day = localDay(from); dayStart(day) < to; day = addDays(day, 1)) {
     const noon = dayStart(day) + 12 * HOUR_MS;
     if (noon > from && noon < to) days.push({ at: noon, label: weekday.format(noon) });
-    const next = new Date(dayStart(day));
-    next.setDate(next.getDate() + 1);
-    day = localDay(next.getTime());
   }
   const band = forecast.emptyBand;
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="relative h-24">
-        <span
-          className="pointer-events-none absolute -top-4 -translate-x-1/2 text-3xs tracking-wider text-muted-foreground uppercase"
-          style={{ left: at(now) }}
-        >
-          Now
-        </span>
-        <AreaChart
-          data={data}
-          config={{ remaining: { label: "Left", color } }}
-          margins={{ top: 4, right: 0, bottom: 0, left: 0 }}
-          className="absolute inset-0"
-        >
-          <Tooltip
-            labelKey="label"
-            variant="frosted-glass"
-            valueFormatter={(value) => formatPoolPercent(value)}
-          />
-          <Area dataKey="remaining" variant="dotted" />
-        </AreaChart>
+    <ForecastChart
+      points={forecast.points.map((point) => ({
+        at: point.at,
+        value: Math.round(point.remaining),
+      }))}
+      from={from}
+      to={to}
+      now={now}
+      color={color}
+      seriesLabel={gt("Left", { $context: "remaining share of a usage limit" })}
+      ticks={days}
+      formatMoment={formatMoment}
+      formatValue={formatPoolPercent}
+    >
+      {band ? (
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-y-0 right-0 bg-black/35"
-          style={{ left: at(now) }}
-        />
-        {band ? (
-          <div
-            aria-hidden
-            data-pool-empty-band
-            className="pointer-events-none absolute inset-y-0"
-            style={{ left: at(band.from), width: `${((band.to - band.from) / span) * 100}%` }}
+          data-pool-empty-band
+          className="pointer-events-none absolute inset-y-0"
+          style={{
+            left: `${((band.from - from) / span) * 100}%`,
+            width: `${((band.to - band.from) / span) * 100}%`,
+          }}
+        >
+          <span
+            data-pool-refill-label
+            className="absolute top-1 right-0 translate-x-1/2 rounded-sm px-1 text-3xs tabular-nums"
           >
-            <span
-              data-pool-refill-label
-              className="absolute top-1 right-0 translate-x-1/2 rounded-sm px-1 text-3xs tabular-nums"
-            >
-              +{formatPoolPercent(band.percent)}
-            </span>
-          </div>
-        ) : null}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-y-0 w-px bg-foreground/45"
-          style={{ left: at(now) }}
-        />
-      </div>
-      <div className="relative h-3 text-3xs tracking-wider text-muted-foreground uppercase">
-        {days.map((day) => (
-          <span key={day.at} className="absolute -translate-x-1/2" style={{ left: at(day.at) }}>
-            {day.label}
+            +{formatPoolPercent(band.percent)}
           </span>
-        ))}
-      </div>
-    </div>
+        </div>
+      ) : null}
+    </ForecastChart>
   );
 }
 
@@ -206,16 +278,27 @@ function PoolCard({
   usage,
   now,
   color,
+  tightest,
   formatMoment,
 }: {
   readonly label: string;
-  readonly color: Rgb;
+  readonly color: SeriesColor;
+  readonly tightest: boolean;
   readonly pool: ReturnType<typeof collectLimitPools>[number] | undefined;
   readonly usage: readonly DayTokens[];
   readonly now: number;
   readonly formatMoment: (at: number) => string;
 }) {
-  const window = pool ? primaryPoolWindow(pool) : null;
+  const gt = useGT();
+  const window = pool ? (tightest ? tightestPoolWindow(pool) : primaryPoolWindow(pool)) : null;
+  // Which quota is charted, when the pool reports several of the same kind.
+  const windowName =
+    tightest &&
+    window &&
+    pool &&
+    pool.windows.filter((candidate) => candidate.kind === window.kind).length > 1
+      ? window.label.split(" · ")[0]
+      : null;
   const from = now - POOL_HISTORY_MS;
   const to = now + POOL_FORECAST_MS;
   const forecast = window
@@ -224,22 +307,27 @@ function PoolCard({
   return (
     <DashboardCard
       icon={<GaugeIcon />}
-      title={`${label} pool`}
+      title={gt("{provider} pool", { provider: label })}
       aside={
         forecast?.runsOutAt ? (
-          <span className="text-warning">Runs out {formatMoment(forecast.runsOutAt)}</span>
+          <span className="text-warning">
+            {gt("Runs out {time}", { time: formatMoment(forecast.runsOutAt) })}
+          </span>
         ) : null
       }
     >
       {forecast ? (
         <>
-          <div className="flex min-w-0 items-baseline justify-between gap-3">
+          <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
             <p className="min-w-0 truncate">
               <span className="text-2xl font-medium text-foreground tabular-nums">
                 {formatPoolPercent(forecast.remainingPercent)}
               </span>{" "}
               <span className="text-sm text-muted-foreground">
-                left of {formatPoolPercent(forecast.capacityPercent)}
+                {gt("left of {capacity}", {
+                  capacity: formatPoolPercent(forecast.capacityPercent),
+                })}
+                {windowName ? ` · ${windowName}` : null}
               </span>
             </p>
             {forecast.nextRefill ? (
@@ -251,7 +339,7 @@ function PoolCard({
               </p>
             ) : null}
           </div>
-          <div className="pt-3">
+          <div className="mt-auto pt-3">
             <PoolChart
               forecast={forecast}
               from={from}
@@ -263,7 +351,9 @@ function PoolCard({
           </div>
         </>
       ) : (
-        <p className="text-sm text-muted-foreground">No limits reported.</p>
+        <p className="text-sm text-muted-foreground">
+          <T>No limits reported.</T>
+        </p>
       )}
     </DashboardCard>
   );
@@ -283,16 +373,23 @@ function ActivityCard({
   readonly grid: ActivityGrid;
   readonly loading: boolean;
 }) {
+  const gt = useGT();
+  const describe = (cell: { readonly day: string; readonly tokens: number }) =>
+    gt("{day}: {tokens} tokens", { day: labelOfDay(cell.day), tokens: formatTokens(cell.tokens) });
   return (
     <DashboardCard
       icon={<CalendarIcon />}
-      title="Activity"
-      aside={grid.totalTokens > 0 ? `${formatTokens(grid.totalTokens)} tokens` : null}
+      title={gt("Activity")}
+      aside={
+        grid.totalTokens > 0
+          ? gt("{tokens} tokens", { tokens: formatTokens(grid.totalTokens) })
+          : null
+      }
     >
       {loading ? (
         <Skeleton className="h-36 w-full" />
       ) : (
-        <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 text-3xs text-muted-foreground">
+        <div className="mt-auto grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 text-3xs text-muted-foreground">
           <span />
           <div className="relative h-4">
             {grid.months.map((month) => (
@@ -325,15 +422,13 @@ function ActivityCard({
                       render={
                         <span
                           role="img"
-                          aria-label={`${labelOfDay(cell.day)}: ${formatTokens(cell.tokens)} tokens`}
+                          aria-label={describe(cell)}
                           data-activity-level={cell.level}
                           className="aspect-square rounded-xs"
                         />
                       }
                     />
-                    <TooltipPopup side="top">
-                      {labelOfDay(cell.day)}: {formatTokens(cell.tokens)} tokens
-                    </TooltipPopup>
+                    <TooltipPopup side="top">{describe(cell)}</TooltipPopup>
                   </UiTooltip>
                 ) : (
                   // oxlint-disable-next-line react/no-array-index-key -- future days are positional
@@ -349,6 +444,7 @@ function ActivityCard({
 }
 
 function UsageCard({ month, loading }: { readonly month: MonthUsage; readonly loading: boolean }) {
+  const gt = useGT();
   const top =
     month.peakTokens > 0 ? scaleLinear().domain([0, month.peakTokens]).nice().domain()[1]! : 0;
   const config = Object.fromEntries(
@@ -360,26 +456,31 @@ function UsageCard({ month, loading }: { readonly month: MonthUsage; readonly lo
   const dayLabel = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
   const labelOf = (day: string) => dayLabel.format(dayStart(day));
   const data = month.rows.map((row) => ({ ...row, label: labelOf(String(row.day)) }));
+  const monthTokens = [...month.totals.values()].reduce((sum, tokens) => sum + tokens, 0);
   const tickIndexes = [...new Set([0, Math.min(7, month.days.length - 1), month.days.length - 1])];
 
   return (
     <DashboardCard
       icon={<ChartLineIcon />}
-      title="Usage"
-      aside={month.costUsd > 0 ? `${formatCompactUsd(month.costUsd)} this month` : null}
+      title={gt("Usage", { $context: "token usage chart title" })}
+      aside={
+        monthTokens > 0 ? gt("{tokens} this month", { tokens: formatTokens(monthTokens) }) : null
+      }
     >
       {loading ? (
         <Skeleton className="h-36 w-full" />
       ) : month.providers.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No usage this month.</p>
+        <p className="text-sm text-muted-foreground">
+          <T>No usage this month.</T>
+        </p>
       ) : (
-        <div className="flex flex-col gap-2">
-          <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 text-3xs text-muted-foreground tabular-nums">
-            <div className="flex h-24 flex-col justify-between text-right">
+        <div className="flex flex-1 flex-col gap-2">
+          <div className="grid flex-1 grid-cols-[auto_minmax(0,1fr)] grid-rows-[minmax(6rem,1fr)_auto] gap-x-2 text-3xs text-muted-foreground tabular-nums">
+            <div className="flex flex-col justify-between text-right">
               <span className="-translate-y-1/2">{formatTokens(top)}</span>
               <span className="translate-y-1/2">0</span>
             </div>
-            <div className="relative h-24 border-b border-white/15">
+            <div className="relative border-b border-white/15">
               <AreaChart
                 data={data}
                 config={config}
@@ -390,7 +491,7 @@ function UsageCard({ month, loading }: { readonly month: MonthUsage; readonly lo
                 <Tooltip
                   labelKey="label"
                   variant="frosted-glass"
-                  valueFormatter={(value) => `${formatTokens(value)} tokens`}
+                  valueFormatter={(value) => gt("{tokens} tokens", { tokens: formatTokens(value) })}
                 />
                 {month.providers.map((provider) => (
                   <Area
@@ -446,6 +547,82 @@ function UsageCard({ month, loading }: { readonly month: MonthUsage; readonly lo
   );
 }
 
+const monthDayFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+
+function SpendCard({
+  forecast,
+  now,
+  loading,
+  formatMoment,
+}: {
+  readonly forecast: SpendForecast;
+  readonly now: number;
+  readonly loading: boolean;
+  readonly formatMoment: (at: number) => string;
+}) {
+  const gt = useGT();
+  const lastDay = forecast.to - DAY_MS / 2;
+  const middle = forecast.from + (forecast.to - forecast.from) / 2;
+  return (
+    <DashboardCard
+      icon={<CircleDollarSignIcon />}
+      title={gt("Spend", { $context: "money spent, card title" })}
+      aside={
+        !loading && forecast.projectedUsd > 0
+          ? gt("On pace for {amount}", { amount: formatCompactUsd(forecast.projectedUsd) })
+          : null
+      }
+    >
+      {loading ? (
+        <Skeleton className="h-36 w-full" />
+      ) : (
+        <>
+          <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <p className="min-w-0 truncate">
+              <span className="text-2xl font-medium text-foreground tabular-nums">
+                {formatCompactUsd(forecast.spentUsd)}
+              </span>{" "}
+              <span className="text-sm text-muted-foreground">
+                {gt("this month", { $context: "follows a dollar amount" })}
+              </span>
+            </p>
+            {forecast.paceUsdPerDay > 0 ? (
+              <p className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                <T>
+                  <span className="text-foreground/90">
+                    <Var>{formatCompactUsd(forecast.paceUsdPerDay)}</Var>
+                  </span>{" "}
+                  a day
+                </T>
+              </p>
+            ) : null}
+          </div>
+          <div className="mt-auto pt-3">
+            <ForecastChart
+              points={forecast.points.map((point) => ({
+                at: point.at,
+                value: Math.round(point.spent),
+              }))}
+              from={forecast.from}
+              to={forecast.to}
+              now={now}
+              color="green"
+              seriesLabel={gt("Spent")}
+              ticks={[
+                { at: forecast.from, label: monthDayFormat.format(forecast.from), align: "start" },
+                { at: middle, label: monthDayFormat.format(middle) },
+                { at: forecast.to, label: monthDayFormat.format(lastDay), align: "end" },
+              ]}
+              formatMoment={formatMoment}
+              formatValue={formatCompactUsd}
+            />
+          </div>
+        </>
+      )}
+    </DashboardCard>
+  );
+}
+
 /** Subscription pools, activity, and month-to-date usage under the new thread composer. */
 export function HomeDashboard() {
   const [now] = useState(() => Date.now());
@@ -456,7 +633,6 @@ export function HomeDashboard() {
     reportFailure: false,
   });
   const formatMoment = useMomentFormat();
-  const accentKey = useThemeRgbKey(ACCENT_VARIABLES, "#5c76fa");
 
   const refreshLimits = useEffectEvent(() => {
     for (const [environmentId, presentation] of presentations) {
@@ -483,27 +659,40 @@ export function HomeDashboard() {
   const loading = isPending && merged.daily.length === 0;
 
   return (
-    <div data-home-dashboard className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      {POOLS.map(({ driver, provider, label }) => (
-        <PoolCard
-          key={driver}
-          label={label}
-          pool={pools.find((pool) => pool.driver === (driver as ServerProvider["driver"]))}
-          usage={tokensOf(provider)}
+    // Pools on top, history below, three a row once the dashboard is wide enough.
+    <div className="@container">
+      <div data-home-dashboard className="grid grid-cols-1 gap-3 @lg:grid-cols-2 @2xl:grid-cols-3">
+        {POOLS.map((entry) => (
+          <PoolCard
+            key={entry.driver}
+            label={entry.label}
+            tightest={"tightest" in entry && entry.tightest}
+            pool={pools.find((pool) => pool.driver === (entry.driver as ServerProvider["driver"]))}
+            usage={tokensOf(entry.provider)}
+            now={now}
+            color={SERIES_COLOR[entry.provider]}
+            formatMoment={formatMoment}
+          />
+        ))}
+        <ActivityCard
+          grid={buildActivityGrid(
+            merged.daily.map((entry) => ({ day: entry.day, tokens: entry.totalTokens })),
+            today,
+            ACTIVITY_WEEKS,
+          )}
+          loading={loading}
+        />
+        <UsageCard month={buildMonthUsage(merged.daily, today)} loading={loading} />
+        <SpendCard
+          forecast={forecastSpend({
+            cost: merged.daily.map((entry) => ({ day: entry.day, tokens: entry.costUsd })),
+            now,
+          })}
           now={now}
-          color={parseRgbKey(accentKey)}
+          loading={loading}
           formatMoment={formatMoment}
         />
-      ))}
-      <ActivityCard
-        grid={buildActivityGrid(
-          merged.daily.map((entry) => ({ day: entry.day, tokens: entry.totalTokens })),
-          today,
-          ACTIVITY_WEEKS,
-        )}
-        loading={loading}
-      />
-      <UsageCard month={buildMonthUsage(merged.daily, today)} loading={loading} />
+      </div>
     </div>
   );
 }

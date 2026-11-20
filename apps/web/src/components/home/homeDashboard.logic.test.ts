@@ -1,3 +1,4 @@
+import type { LimitPool, LimitPoolWindow } from "@t3tools/shared/usageLimits";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -5,8 +6,10 @@ import {
   buildActivityGrid,
   dayStart,
   forecastPool,
+  forecastSpend,
   formatCompactUsd,
   localDay,
+  tightestPoolWindow,
   tokensBetween,
 } from "./homeDashboard.logic";
 
@@ -110,5 +113,60 @@ describe("formatCompactUsd", () => {
     [2_460_000, "$2.5M"],
   ])("formats %d as %s", (value, expected) => {
     expect(formatCompactUsd(value)).toBe(expected);
+  });
+});
+
+describe("tightestPoolWindow", () => {
+  const poolWindow = (
+    id: string,
+    kind: LimitPoolWindow["kind"],
+    usedPercent: number,
+  ): LimitPoolWindow =>
+    ({
+      id,
+      kind,
+      label: id,
+      members: [{ window: { id, kind, label: id, usedPercent } }],
+      weights: [1],
+      capacity: 1,
+      columns: [],
+    }) as unknown as LimitPoolWindow;
+
+  it("charts the most spent weekly quota among several", () => {
+    const pool = {
+      driver: "antigravity",
+      windows: [
+        poolWindow("gemini-5h", "session", 90),
+        poolWindow("gemini-weekly", "weekly", 20),
+        poolWindow("3p-weekly", "weekly", 60),
+      ],
+    } as unknown as LimitPool;
+    expect(tightestPoolWindow(pool)?.id).toBe("3p-weekly");
+  });
+
+  it("returns null for a pool without windows", () => {
+    expect(tightestPoolWindow({ windows: [] } as unknown as LimitPool)).toBeNull();
+  });
+});
+
+describe("forecastSpend", () => {
+  it("accumulates the month so far and projects the last week's pace to its end", () => {
+    const now = dayStart("2026-11-20") + 12 * HOUR;
+    // $70 a day for the last week and a half, $35 so far today.
+    const cost = Array.from({ length: 10 }, (_, index) => ({
+      day: addDays("2026-11-20", index - 9),
+      tokens: index === 9 ? 35 : 70,
+    }));
+    const forecast = forecastSpend({ cost, now });
+    expect(forecast.from).toBe(dayStart("2026-11-01"));
+    expect(forecast.to).toBe(dayStart("2026-12-01"));
+    expect(forecast.spentUsd).toBeCloseTo(9 * 70 + 35);
+    expect(forecast.paceUsdPerDay).toBeCloseTo(70);
+    expect(forecast.projectedUsd).toBeCloseTo(9 * 70 + 35 + 10.5 * 70);
+    expect(forecast.points[0]).toEqual({ at: forecast.from, spent: 0 });
+    expect(forecast.points).toContainEqual({ at: now, spent: forecast.spentUsd });
+    expect(forecast.points.at(-1)?.at).toBe(forecast.to);
+    const times = forecast.points.map((point) => point.at);
+    expect(times).toEqual([...times].sort((left, right) => left - right));
   });
 });
