@@ -7,7 +7,12 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import type { ContextMenuSource, EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
-import { memo, useState, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  memo,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { useGT } from "gt-react";
 import { FolderIcon } from "lucide-react";
 
@@ -316,6 +321,16 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
     void showFileContextMenu(position, contextMenuSourceOf(event));
   };
 
+  // Chromium on macOS sends no contextmenu event for these keys.
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.defaultPrevented) return;
+    if (!(event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    void showFileContextMenu({ x: bounds.left, y: bounds.bottom }, "keyboard");
+  };
+
   const canOpenInEditor = onOpen !== undefined;
   const canOpenInBrowser = onOpenInBrowser !== undefined;
   const canOpenInPanel = threadRef !== undefined && Boolean(panelPath);
@@ -358,6 +373,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
                 handleOpenInFilePreview();
               }}
               onContextMenu={handleContextMenu}
+              onKeyDown={handleKeyDown}
             >
               <FileTagChipContent
                 icon={
@@ -383,6 +399,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
               data-markdown-copy={copyMarkdown}
               onClick={handleContextMenu}
               onContextMenu={handleContextMenu}
+              onKeyDown={handleKeyDown}
             >
               <FileTagChipContent
                 icon={
