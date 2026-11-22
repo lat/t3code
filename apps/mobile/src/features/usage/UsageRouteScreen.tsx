@@ -158,6 +158,7 @@ function UsageScreen(props: {
         costUsd: hour.costUsd,
         totalTokens: hour.totalTokens,
         byProvider: hour.byProvider,
+        byModel: new Map(),
       }))
     : merged.daily;
 

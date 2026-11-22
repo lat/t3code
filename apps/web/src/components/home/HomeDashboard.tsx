@@ -2,10 +2,16 @@ import { useAtomValue } from "@effect/atom-react";
 import type { ServerProvider, UsageProviderKind } from "@t3tools/contracts";
 import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
 import { formatTokens, makeWindow } from "@t3tools/shared/usageFormat";
-import { collectLimitAccounts, collectLimitPools } from "@t3tools/shared/usageLimits";
+import type { DailyTotals } from "@t3tools/shared/usageMerge";
+import {
+  antigravityWindowLimitsModel,
+  collectLimitAccounts,
+  collectLimitPools,
+  type LimitPoolWindow,
+} from "@t3tools/shared/usageLimits";
 import { scaleLinear } from "d3-scale";
-import { T, useGT, Var } from "gt-react";
-import { CalendarIcon, ChartLineIcon, CircleDollarSignIcon, GaugeIcon } from "lucide-react";
+import { T, useGT } from "gt-react";
+import { CalendarIcon, ChartLineIcon, GaugeIcon } from "lucide-react";
 import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
@@ -30,13 +36,12 @@ import {
   type DayTokens,
   dayStart,
   forecastPool,
-  forecastSpend,
-  formatCompactUsd,
   formatPoolPercent,
+  formatSpan,
   localDay,
   type MonthUsage,
   type PoolForecast,
-  type SpendForecast,
+  type PoolRunway,
   poolForecastMembers,
   primaryPoolWindow,
   tightestPoolWindow,
@@ -49,23 +54,36 @@ const ACTIVITY_WEEKS = 13;
 const POOL_HISTORY_MS = 3 * DAY_MS;
 const POOL_FORECAST_MS = 3 * DAY_MS;
 
+interface PoolQuota {
+  /** The quotas this card may chart; the one closest to running out wins. */
+  readonly includes: (window: LimitPoolWindow) => boolean;
+  /** Whether a model's tokens spend the charted quota. */
+  readonly meters: (window: LimitPoolWindow, model: string) => boolean;
+}
+
+interface PoolEntry {
+  readonly driver: string;
+  readonly provider: UsageProviderKind;
+  readonly label: string;
+  readonly quota?: PoolQuota;
+}
+
 // Each pool charts in its provider's series color, as in the Usage legend.
-const POOLS = [
+const POOLS: readonly PoolEntry[] = [
   { driver: "codex", provider: "codex", label: "Codex" },
   { driver: "claudeAgent", provider: "claude", label: "Claude" },
-  // Antigravity meters each model family separately; chart whichever weekly quota binds first.
+  // Antigravity meters each model family apart. Claude already has its own card, so this one
+  // charts the Gemini quotas, whichever binds first, against Gemini tokens alone.
   {
     driver: "antigravity",
     provider: "antigravity",
     label: "Antigravity",
-    tightest: true,
+    quota: {
+      includes: (window) => window.id.startsWith("gemini"),
+      meters: (window, model) => antigravityWindowLimitsModel(window, model),
+    },
   },
-] as const satisfies readonly {
-  driver: string;
-  provider: UsageProviderKind;
-  label: string;
-  tightest?: boolean;
-}[];
+];
 
 const SERIES_COLOR: Record<UsageProviderKind, DitherColor> = {
   codex: "white",
@@ -85,17 +103,22 @@ function DashboardCard({
   icon,
   title,
   aside,
+  className,
   children,
 }: {
   readonly icon: ReactNode;
   readonly title: string;
   readonly aside?: ReactNode;
+  readonly className?: string | undefined;
   readonly children: ReactNode;
 }) {
   return (
     <section
       data-home-dashboard-card
-      className="flex min-w-0 flex-col gap-3 rounded-xl border p-4 backdrop-blur-md"
+      className={cn(
+        "flex min-w-0 flex-col gap-3 rounded-xl border p-4 backdrop-blur-md",
+        className,
+      )}
     >
       <header className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
         <h2 className="flex min-w-0 items-center gap-2 font-medium text-foreground/90">
@@ -129,7 +152,7 @@ interface ChartTick {
   readonly align?: "start" | "center" | "end";
 }
 
-/** A series over `[from, to]` with the future past `now` shaded, like the pool and spend cards. */
+/** A series over `[from, to]` with the future past `now` shaded. */
 function ForecastChart({
   points,
   from,
@@ -272,71 +295,116 @@ function PoolChart({
   );
 }
 
-function PoolCard({
-  label,
-  pool,
-  usage,
+/** Whether the pool lasts to its refill at the recent pace, under the headline. */
+function PoolRunwayLine({
+  runway,
   now,
-  color,
-  tightest,
   formatMoment,
 }: {
-  readonly label: string;
-  readonly color: SeriesColor;
-  readonly tightest: boolean;
-  readonly pool: ReturnType<typeof collectLimitPools>[number] | undefined;
-  readonly usage: readonly DayTokens[];
+  readonly runway: PoolRunway;
   readonly now: number;
   readonly formatMoment: (at: number) => string;
 }) {
   const gt = useGT();
-  const window = pool ? (tightest ? tightestPoolWindow(pool) : primaryPoolWindow(pool)) : null;
-  // Which quota is charted, when the pool reports several of the same kind.
-  const windowName =
-    tightest &&
-    window &&
-    pool &&
-    pool.windows.filter((candidate) => candidate.kind === window.kind).length > 1
-      ? window.label.split(" · ")[0]
-      : null;
+  if (runway.runsOutAt !== null && runway.runsOutAt <= now) {
+    return (
+      <p data-pool-runway="empty" className="text-xs text-warning">
+        <T>Out until the reset</T>
+      </p>
+    );
+  }
+  if (runway.runsOutAt !== null) {
+    return (
+      <p data-pool-runway="short" className="min-w-0 truncate text-xs text-warning">
+        {gt("On pace to run out {time}, {gap} before the reset", {
+          time: formatMoment(runway.runsOutAt),
+          gap: formatSpan(runway.resetAt - runway.runsOutAt),
+        })}
+      </p>
+    );
+  }
+  return (
+    <p data-pool-runway="lasts" className="min-w-0 truncate text-xs text-muted-foreground">
+      {gt("On pace to reach the reset with {left} left", {
+        left: formatPoolPercent(runway.leftAtReset),
+      })}
+    </p>
+  );
+}
+
+function PoolCard({
+  label,
+  pool,
+  daily,
+  provider,
+  now,
+  color,
+  quota,
+  formatMoment,
+}: {
+  readonly label: string;
+  readonly color: SeriesColor;
+  readonly quota: PoolQuota | undefined;
+  readonly pool: ReturnType<typeof collectLimitPools>[number] | undefined;
+  readonly daily: readonly DailyTotals[];
+  readonly provider: UsageProviderKind;
+  readonly now: number;
+  readonly formatMoment: (at: number) => string;
+}) {
+  const gt = useGT();
+  const window = pool
+    ? quota
+      ? tightestPoolWindow(pool, quota.includes)
+      : primaryPoolWindow(pool)
+    : null;
+  // Which quota is charted, when the card picks one of several.
+  const windowName = quota && window ? window.label.split(" · ")[0] : null;
+  const usage: readonly DayTokens[] = daily.map((entry) => ({
+    day: entry.day,
+    tokens:
+      quota && window
+        ? [...entry.byModel.values()].reduce(
+            (sum, model) =>
+              model.provider === provider && quota.meters(window, model.model)
+                ? sum + model.totalTokens
+                : sum,
+            0,
+          )
+        : (entry.byProvider.get(provider)?.totalTokens ?? 0),
+  }));
   const from = now - POOL_HISTORY_MS;
   const to = now + POOL_FORECAST_MS;
   const forecast = window
     ? forecastPool({ members: poolForecastMembers(window), usage, now, from, to })
     : null;
   return (
-    <DashboardCard
-      icon={<GaugeIcon />}
-      title={gt("{provider} pool", { provider: label })}
-      aside={
-        forecast?.runsOutAt ? (
-          <span className="text-warning">
-            {gt("Runs out {time}", { time: formatMoment(forecast.runsOutAt) })}
-          </span>
-        ) : null
-      }
-    >
+    <DashboardCard icon={<GaugeIcon />} title={gt("{provider} pool", { provider: label })}>
       {forecast ? (
         <>
-          <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-            <p className="min-w-0 truncate">
-              <span className="text-2xl font-medium text-foreground tabular-nums">
-                {formatPoolPercent(forecast.remainingPercent)}
-              </span>{" "}
-              <span className="text-sm text-muted-foreground">
-                {gt("left of {capacity}", {
-                  capacity: formatPoolPercent(forecast.capacityPercent),
-                })}
-                {windowName ? ` · ${windowName}` : null}
-              </span>
-            </p>
-            {forecast.nextRefill ? (
-              <p className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                <span className="text-foreground/90">
-                  +{formatPoolPercent(forecast.nextRefill.percent)}
+          <div className="flex flex-col gap-1">
+            <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+              <p className="min-w-0 truncate">
+                <span className="text-2xl font-medium text-foreground tabular-nums">
+                  {formatPoolPercent(forecast.remainingPercent)}
                 </span>{" "}
-                {formatMoment(forecast.nextRefill.at)}
+                <span className="text-sm text-muted-foreground">
+                  {gt("left of {capacity}", {
+                    capacity: formatPoolPercent(forecast.capacityPercent),
+                  })}
+                  {windowName ? ` · ${windowName}` : null}
+                </span>
               </p>
+              {forecast.nextRefill ? (
+                <p className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                  <span className="text-foreground/90">
+                    +{formatPoolPercent(forecast.nextRefill.percent)}
+                  </span>{" "}
+                  {formatMoment(forecast.nextRefill.at)}
+                </p>
+              ) : null}
+            </div>
+            {forecast.runway ? (
+              <PoolRunwayLine runway={forecast.runway} now={now} formatMoment={formatMoment} />
             ) : null}
           </div>
           <div className="mt-auto pt-3">
@@ -443,7 +511,15 @@ function ActivityCard({
   );
 }
 
-function UsageCard({ month, loading }: { readonly month: MonthUsage; readonly loading: boolean }) {
+function UsageCard({
+  month,
+  loading,
+  className,
+}: {
+  readonly month: MonthUsage;
+  readonly loading: boolean;
+  readonly className?: string | undefined;
+}) {
   const gt = useGT();
   const top =
     month.peakTokens > 0 ? scaleLinear().domain([0, month.peakTokens]).nice().domain()[1]! : 0;
@@ -463,6 +539,7 @@ function UsageCard({ month, loading }: { readonly month: MonthUsage; readonly lo
     <DashboardCard
       icon={<ChartLineIcon />}
       title={gt("Usage", { $context: "token usage chart title" })}
+      className={className}
       aside={
         monthTokens > 0 ? gt("{tokens} this month", { tokens: formatTokens(monthTokens) }) : null
       }
@@ -547,83 +624,7 @@ function UsageCard({ month, loading }: { readonly month: MonthUsage; readonly lo
   );
 }
 
-const monthDayFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
-
-function SpendCard({
-  forecast,
-  now,
-  loading,
-  formatMoment,
-}: {
-  readonly forecast: SpendForecast;
-  readonly now: number;
-  readonly loading: boolean;
-  readonly formatMoment: (at: number) => string;
-}) {
-  const gt = useGT();
-  const lastDay = forecast.to - DAY_MS / 2;
-  const middle = forecast.from + (forecast.to - forecast.from) / 2;
-  return (
-    <DashboardCard
-      icon={<CircleDollarSignIcon />}
-      title={gt("Spend", { $context: "money spent, card title" })}
-      aside={
-        !loading && forecast.projectedUsd > 0
-          ? gt("On pace for {amount}", { amount: formatCompactUsd(forecast.projectedUsd) })
-          : null
-      }
-    >
-      {loading ? (
-        <Skeleton className="h-36 w-full" />
-      ) : (
-        <>
-          <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-            <p className="min-w-0 truncate">
-              <span className="text-2xl font-medium text-foreground tabular-nums">
-                {formatCompactUsd(forecast.spentUsd)}
-              </span>{" "}
-              <span className="text-sm text-muted-foreground">
-                {gt("this month", { $context: "follows a dollar amount" })}
-              </span>
-            </p>
-            {forecast.paceUsdPerDay > 0 ? (
-              <p className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                <T>
-                  <span className="text-foreground/90">
-                    <Var>{formatCompactUsd(forecast.paceUsdPerDay)}</Var>
-                  </span>{" "}
-                  a day
-                </T>
-              </p>
-            ) : null}
-          </div>
-          <div className="mt-auto pt-3">
-            <ForecastChart
-              points={forecast.points.map((point) => ({
-                at: point.at,
-                value: Math.round(point.spent),
-              }))}
-              from={forecast.from}
-              to={forecast.to}
-              now={now}
-              color="green"
-              seriesLabel={gt("Spent")}
-              ticks={[
-                { at: forecast.from, label: monthDayFormat.format(forecast.from), align: "start" },
-                { at: middle, label: monthDayFormat.format(middle) },
-                { at: forecast.to, label: monthDayFormat.format(lastDay), align: "end" },
-              ]}
-              formatMoment={formatMoment}
-              formatValue={formatCompactUsd}
-            />
-          </div>
-        </>
-      )}
-    </DashboardCard>
-  );
-}
-
-/** Subscription pools, activity, and month-to-date usage under the new thread composer. */
+/** Subscription pools, then activity and month-to-date usage, under the new thread composer. */
 export function HomeDashboard() {
   const [now] = useState(() => Date.now());
   const [window] = useState(() => makeWindow(ACTIVITY_WEEKS * 7, new Date(now), "day"));
@@ -651,11 +652,6 @@ export function HomeDashboard() {
 
   const pools = collectLimitPools(collectLimitAccounts(presentations), now);
   const today = localDay(now);
-  const tokensOf = (provider: UsageProviderKind): readonly DayTokens[] =>
-    merged.daily.map((entry) => ({
-      day: entry.day,
-      tokens: entry.byProvider.get(provider)?.totalTokens ?? 0,
-    }));
   const loading = isPending && merged.daily.length === 0;
 
   return (
@@ -666,9 +662,10 @@ export function HomeDashboard() {
           <PoolCard
             key={entry.driver}
             label={entry.label}
-            tightest={"tightest" in entry && entry.tightest}
+            quota={entry.quota}
             pool={pools.find((pool) => pool.driver === (entry.driver as ServerProvider["driver"]))}
-            usage={tokensOf(entry.provider)}
+            daily={merged.daily}
+            provider={entry.provider}
             now={now}
             color={SERIES_COLOR[entry.provider]}
             formatMoment={formatMoment}
@@ -682,15 +679,10 @@ export function HomeDashboard() {
           )}
           loading={loading}
         />
-        <UsageCard month={buildMonthUsage(merged.daily, today)} loading={loading} />
-        <SpendCard
-          forecast={forecastSpend({
-            cost: merged.daily.map((entry) => ({ day: entry.day, tokens: entry.costUsd })),
-            now,
-          })}
-          now={now}
+        <UsageCard
+          month={buildMonthUsage(merged.daily, today)}
           loading={loading}
-          formatMoment={formatMoment}
+          className="@lg:col-span-2"
         />
       </div>
     </div>

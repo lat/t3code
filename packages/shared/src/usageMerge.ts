@@ -48,6 +48,11 @@ export interface DailyTotals {
   readonly costUsd: number;
   readonly totalTokens: number;
   readonly byProvider: ReadonlyMap<UsageProviderKind, { costUsd: number; totalTokens: number }>;
+  /** Tokens per provider model, such as Antigravity's Gemini and Claude models apart. */
+  readonly byModel: ReadonlyMap<
+    string,
+    { readonly provider: UsageProviderKind; readonly model: string; readonly totalTokens: number }
+  >;
 }
 
 export interface HourlyTotals {
@@ -397,6 +402,7 @@ export function mergeUsage(
       costUsd: number;
       totalTokens: number;
       byProvider: Map<UsageProviderKind, { costUsd: number; totalTokens: number }>;
+      byModel: Map<string, { provider: UsageProviderKind; model: string; totalTokens: number }>;
     }
   >();
   const hourlyAccumulator = new Map<
@@ -506,6 +512,10 @@ export function mergeUsage(
         costUsd: 0,
         totalTokens: 0,
         byProvider: new Map<UsageProviderKind, { costUsd: number; totalTokens: number }>(),
+        byModel: new Map<
+          string,
+          { provider: UsageProviderKind; model: string; totalTokens: number }
+        >(),
       };
       day.costUsd += bucket.costUsd;
       day.totalTokens += tokens;
@@ -513,6 +523,14 @@ export function mergeUsage(
       dayProvider.costUsd += bucket.costUsd;
       dayProvider.totalTokens += tokens;
       day.byProvider.set(bucket.provider, dayProvider);
+      const dayModelKey = `${bucket.provider} ${bucket.model}`;
+      const dayModel = day.byModel.get(dayModelKey) ?? {
+        provider: bucket.provider,
+        model: bucket.model,
+        totalTokens: 0,
+      };
+      dayModel.totalTokens += tokens;
+      day.byModel.set(dayModelKey, dayModel);
       dailyAccumulator.set(bucket.day, day);
 
       if (bucket.hourStart !== undefined) {
@@ -572,6 +590,7 @@ export function mergeUsage(
       costUsd: totals.costUsd,
       totalTokens: totals.totalTokens,
       byProvider: totals.byProvider,
+      byModel: totals.byModel,
     }))
     .sort((a, b) => a.day.localeCompare(b.day));
 

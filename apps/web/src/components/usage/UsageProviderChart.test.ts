@@ -17,6 +17,7 @@ describe("buildPeriodColumns", () => {
           ["pi" as const, { costUsd: 5, totalTokens: 50 }],
           ["muse" as const, { costUsd: 7, totalTokens: 70 }],
         ]),
+        byModel: new Map(),
       },
     ],
     [
@@ -26,6 +27,7 @@ describe("buildPeriodColumns", () => {
         costUsd: 5,
         totalTokens: 50,
         byProvider: new Map([["claude" as const, { costUsd: 5, totalTokens: 50 }]]),
+        byModel: new Map(),
       },
     ],
   ]);

@@ -71,6 +71,16 @@ export interface PoolForecast {
     readonly to: number;
     readonly percent: number;
   } | null;
+  /** Whether the pool reaches its next refill at the recent burn rate. */
+  readonly runway: PoolRunway | null;
+}
+
+export interface PoolRunway {
+  readonly resetAt: number;
+  /** When the pool empties before the refill, or null when it lasts. */
+  readonly runsOutAt: number | null;
+  /** Member percent still left when the refill arrives. */
+  readonly leftAtReset: number;
 }
 
 export interface PoolForecastMember {
@@ -127,8 +137,17 @@ export function forecastPool(input: {
       : now - 7 * DAY_MS;
   const tokensInWindows = tokensBetween(usage, earliestStart, now, now);
   const percentPerToken = tokensInWindows > 0 ? usedNow / tokensInWindows : 0;
+  // Without token history for the spend, each window is assumed to keep its average pace so far.
+  const windowAverageBurn = starts.reduce(
+    (sum, start) =>
+      sum + (start.member.weight * start.member.usedPercent) / Math.max(HOUR_MS, now - start.at),
+    0,
+  );
   const burnPerMs =
-    (percentPerToken * tokensBetween(usage, now - BURN_LOOKBACK_MS, now, now)) / BURN_LOOKBACK_MS;
+    percentPerToken > 0
+      ? (percentPerToken * tokensBetween(usage, now - BURN_LOOKBACK_MS, now, now)) /
+        BURN_LOOKBACK_MS
+      : windowAverageBurn;
 
   const clamp = (value: number) => Math.max(0, Math.min(capacityPercent, value));
   // A previous window is assumed to have run at the current window's pace.
@@ -188,6 +207,17 @@ export function forecastPool(input: {
     points.push({ at, remaining: future.level });
   }
 
+  let runway: PoolRunway | null = null;
+  if (nextRefill) {
+    const leftAtReset = Math.max(0, remainingPercent - burnPerMs * (nextRefill.at - now));
+    runway = {
+      resetAt: nextRefill.at,
+      runsOutAt:
+        remainingPercent <= 0 ? now : leftAtReset <= 0 ? now + remainingPercent / burnPerMs : null,
+      leftAtReset,
+    };
+  }
+
   return {
     capacityPercent,
     remainingPercent,
@@ -195,6 +225,7 @@ export function forecastPool(input: {
     runsOutAt: future.runsOutAt,
     nextRefill,
     emptyBand,
+    runway,
   };
 }
 
@@ -210,64 +241,24 @@ export function primaryPoolWindow(pool: LimitPool): LimitPoolWindow | null {
 
 /**
  * The window of the primary kind closest to running out, for pools that meter several quotas of
- * one kind side by side (Antigravity's per-family weekly buckets).
+ * one kind side by side (Antigravity's per-family weekly buckets). `include` narrows the quotas
+ * considered, such as to Antigravity's Gemini ones.
  */
-export function tightestPoolWindow(pool: LimitPool): LimitPoolWindow | null {
-  const primary = primaryPoolWindow(pool);
+export function tightestPoolWindow(
+  pool: LimitPool,
+  include: (window: LimitPoolWindow) => boolean = () => true,
+): LimitPoolWindow | null {
+  const windows = pool.windows.filter(include);
+  const primary = primaryPoolWindow({ ...pool, windows });
   if (!primary) return null;
   const usedOf = (window: LimitPoolWindow) =>
     window.members.reduce(
       (sum, member, index) => sum + (window.weights[index] ?? 1) * member.window.usedPercent,
       0,
     ) / Math.max(1, window.capacity);
-  return pool.windows
+  return windows
     .filter((window) => window.kind === primary.kind)
     .reduce((tightest, window) => (usedOf(window) > usedOf(tightest) ? window : tightest), primary);
-}
-
-export interface SpendForecast {
-  /** Local midnight starting the month, and the next month's. */
-  readonly from: number;
-  readonly to: number;
-  readonly points: readonly { readonly at: number; readonly spent: number }[];
-  readonly spentUsd: number;
-  readonly projectedUsd: number;
-  readonly paceUsdPerDay: number;
-}
-
-/**
- * Month-to-date spend, cumulative, carried to the month's end at the last week's daily pace.
- * Each day's cost is spread evenly across the day, like {@link tokensBetween}.
- */
-export function forecastSpend(input: {
-  readonly cost: readonly DayTokens[];
-  readonly now: number;
-  readonly stepMs?: number;
-}): SpendForecast {
-  const { cost, now } = input;
-  const stepMs = input.stepMs ?? 6 * HOUR_MS;
-  const today = localDay(now);
-  const from = dayStart(`${today.slice(0, 8)}01`);
-  const nextMonth = new Date(from);
-  nextMonth.setMonth(nextMonth.getMonth() + 1);
-  const to = nextMonth.getTime();
-  const spentUsd = tokensBetween(cost, from, now, now);
-  const paceLookbackMs = 7 * DAY_MS;
-  const paceUsdPerDay =
-    (tokensBetween(cost, now - paceLookbackMs, now, now) / paceLookbackMs) * DAY_MS;
-  const spentAt = (at: number) =>
-    at <= now
-      ? tokensBetween(cost, from, at, now)
-      : spentUsd + (paceUsdPerDay * (at - now)) / DAY_MS;
-
-  const points: { at: number; spent: number }[] = [];
-  for (let at = from; at < to; at += stepMs) {
-    if (at > now && points.at(-1)!.at < now) points.push({ at: now, spent: spentUsd });
-    points.push({ at, spent: spentAt(at) });
-  }
-  if (points.at(-1)!.at < now) points.push({ at: now, spent: spentUsd });
-  points.push({ at: to, spent: spentAt(to) });
-  return { from, to, points, spentUsd, projectedUsd: spentAt(to), paceUsdPerDay };
 }
 
 export interface ActivityCell {
@@ -402,16 +393,17 @@ export function buildMonthUsage(daily: readonly DailyTotals[], today: string): M
   return { days, providers, rows, totals, costUsd, peakTokens };
 }
 
-export function formatCompactUsd(value: number): string {
-  if (value >= 1e6) return `$${trimDecimal(value / 1e6)}M`;
-  if (value >= 1e3) return `$${trimDecimal(value / 1e3)}k`;
-  return `$${Math.round(value)}`;
-}
-
 export function formatPoolPercent(value: number): string {
   return `${Math.round(value).toLocaleString("en-US")}%`;
 }
 
-function trimDecimal(value: number): string {
-  return value >= 100 ? String(Math.round(value)) : value.toFixed(1).replace(/\.0$/, "");
+/** A span as its two largest units, such as "2d 5h" or "3h 20m". */
+export function formatSpan(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  const days = Math.floor(minutes / (24 * 60));
+  const hours = Math.floor((minutes % (24 * 60)) / 60);
+  const rest = minutes % 60;
+  if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  if (hours > 0) return rest > 0 ? `${hours}h ${rest}m` : `${hours}h`;
+  return `${rest}m`;
 }
