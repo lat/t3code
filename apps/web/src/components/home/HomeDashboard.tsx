@@ -313,22 +313,39 @@ function PoolRunwayLine({
       </p>
     );
   }
+  // Short enough for a third-width card; the full sentence shows on hover.
+  const line = (kind: "short" | "lasts", text: string, detail: string) => (
+    <UiTooltip>
+      <TooltipTrigger
+        render={
+          <p
+            data-pool-runway={kind}
+            className={cn(
+              "min-w-0 truncate text-xs",
+              kind === "short" ? "text-warning" : "text-muted-foreground",
+            )}
+          />
+        }
+      >
+        {text}
+      </TooltipTrigger>
+      <TooltipPopup side="top">{detail}</TooltipPopup>
+    </UiTooltip>
+  );
   if (runway.runsOutAt !== null) {
-    return (
-      <p data-pool-runway="short" className="min-w-0 truncate text-xs text-warning">
-        {gt("On pace to run out {time}, {gap} before the reset", {
-          time: formatMoment(runway.runsOutAt),
-          gap: formatSpan(runway.resetAt - runway.runsOutAt),
-        })}
-      </p>
+    const time = formatMoment(runway.runsOutAt);
+    const gap = formatSpan(runway.resetAt - runway.runsOutAt);
+    return line(
+      "short",
+      gt("Runs out {time} · {gap} early", { time, gap }),
+      gt("On pace to run out {time}, {gap} before the reset", { time, gap }),
     );
   }
-  return (
-    <p data-pool-runway="lasts" className="min-w-0 truncate text-xs text-muted-foreground">
-      {gt("On pace to reach the reset with {left} left", {
-        left: formatPoolPercent(runway.leftAtReset),
-      })}
-    </p>
+  const left = formatPoolPercent(runway.leftAtReset);
+  return line(
+    "lasts",
+    gt("Lasts to reset · {left} left", { left }),
+    gt("On pace to reach the reset with {left} left", { left }),
   );
 }
 
@@ -457,7 +474,7 @@ function ActivityCard({
       {loading ? (
         <Skeleton className="h-36 w-full" />
       ) : (
-        <div className="mt-auto grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 text-3xs text-muted-foreground">
+        <div className="my-auto grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 text-3xs text-muted-foreground">
           <span />
           <div className="relative h-4">
             {grid.months.map((month) => (
