@@ -46,7 +46,6 @@ import {
 import {
   AssetWorkspaceAssetNotFoundError,
   AuthPreviewOperateScope,
-  type ContextMenuSource,
   type EditorId,
   type EnvironmentId,
   type ServerConfig,
@@ -119,7 +118,7 @@ import { SharedTooltipProvider, SharedTooltipTrigger } from "./ui/shared-tooltip
 import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { recordVisitForThread } from "../browserHistoryStore";
-import { contextMenuSourceOf } from "../contextMenuSource";
+import { contextMenuSourceOf, openContextMenuFromKeyboard } from "../contextMenuSource";
 import {
   PreferredEditorEnvironmentRequiredError,
   useOpenInPreferredEditor,
@@ -700,7 +699,7 @@ function useChatMarkdownState(
             target !== null &&
             resolveRemoteOpenState({
               target,
-              sshTarget: null,
+              routes: [],
               remoteOpenTargets: undefined,
               isDesktopRenderer: window.desktopBridge !== undefined,
               hostEnvironmentId: appAtomRegistry.get(hostEnvironmentIdAtom),
@@ -881,9 +880,10 @@ function useChatMarkdownState(
     }
     const query = workspaceLinkLookupQuery(workspaceRelativePath, cwd);
     if (query === null) return null;
+    const basenameLookup = needsWorkspaceBasenameLookup(workspaceRelativePath);
     // Search can be truncated or still scanning, so it cannot rule out the literal
     // path. A path with a folder opens as written whenever it exists.
-    if (!needsWorkspaceBasenameLookup(workspaceRelativePath)) {
+    if (!basenameLookup) {
       const metadata = await getFilesystemMetadata({
         environmentId,
         input: { paths: [resolveWorkspaceFilePath(workspaceRelativePath, cwd)] },
@@ -918,34 +918,48 @@ function useChatMarkdownState(
     const agentRoots = (agentDirectories?.() ?? []).filter((root) => root !== cwd);
     if (otherRoots.length === 0 && agentRoots.length === 0) return null;
     // Another project's file never replaces a thread-local file the search missed.
-    if (needsWorkspaceBasenameLookup(workspaceRelativePath)) {
+    if (basenameLookup) {
       const metadata = await getFilesystemMetadata({
         environmentId,
         input: { paths: [resolveWorkspaceFilePath(workspaceRelativePath, cwd)] },
       });
       if (metadata._tag !== "Success" || metadata.value.entries[0] !== null) return null;
     }
-    const projectMatch = pickProjectLinkMatch(
-      workspaceRelativePath,
-      await Promise.all(otherRoots.map(searchRoot)),
-    );
+    const projectSearches = await Promise.all(otherRoots.map(searchRoot));
+    const projectMatch = pickProjectLinkMatch(workspaceRelativePath, [own, ...projectSearches]);
     if (projectMatch !== null || agentRoots.length === 0) return projectMatch;
-    // No project has the file, so it opens where the agent last worked, as written.
+    // An unresolved project lookup falls back to the agent's working directories.
     const agentPaths = agentRoots.map((root) =>
       resolveWorkspaceFilePath(workspaceRelativePath, root),
     );
     const metadata = await getFilesystemMetadata({ environmentId, input: { paths: agentPaths } });
     if (metadata._tag !== "Success") return null;
     const literal = agentPaths.find((_, index) => metadata.value.entries[index]?.kind === "file");
-    if (literal !== undefined || !needsWorkspaceBasenameLookup(workspaceRelativePath)) {
+    if (literal !== undefined || !basenameLookup) {
       return literal ?? null;
     }
     return findAgentDirectoryMatch(workspaceRelativePath, agentRoots, searchRoot);
   };
   const openFileInPanel = (fileLinkMeta: MarkdownFileLinkMeta, panelPath: string) => {
     if (!threadRef) return;
+    // The panel reads relative paths from the thread's folder. A pull request body's `cwd` is the
+    // checkout of its repository, which can be another folder.
+    const shell = readThreadShell(threadRef);
+    const panelRoot =
+      shell?.worktreePath ??
+      projects.find(
+        (project) => project.environmentId === environmentId && project.id === shell?.projectId,
+      )?.workspaceRoot;
     const openAt = (path: string) =>
-      useRightPanelStore.getState().openFile(threadRef, path, fileLinkMeta.line);
+      useRightPanelStore
+        .getState()
+        .openFile(
+          threadRef,
+          cwd && panelRoot !== undefined && cwd !== panelRoot
+            ? resolveWorkspaceFilePath(path, cwd)
+            : path,
+          fileLinkMeta.line,
+        );
     if (
       fileLinkMeta.workspaceLookupPath === null ||
       !cwd ||
@@ -1359,63 +1373,6 @@ const CHAT_MARKDOWN_COMPONENTS = {
       const canOpenInPreview =
         canOperatePreview && Boolean(threadRef && isPreviewAvailableFor(threadRef.environmentId));
       const linkChildren = <MarkdownLinkContext value>{children}</MarkdownLinkContext>;
-      const showLinkContextMenu = (
-        position: { x: number; y: number },
-        source: ContextMenuSource,
-      ) => {
-        if (!href) return;
-        const api = readLocalApi();
-        if (!api) return;
-        const threadLinkAction = !canOperateHost
-          ? undefined
-          : linkedThreadPullRequestFor(href) !== null
-            ? "unlink-from-thread"
-            : resolveThreadPullRequest(href) === null
-              ? undefined
-              : "link-to-thread";
-        void showExternalLinkContextMenu({
-          href,
-          canOpenInPreview,
-          threadLinkAction,
-          position,
-          showContextMenu: (items, position) => api.contextMenu.show(items, position, source),
-          openInPreview: async (target) => {
-            const result = await openExternalLinkInPreview(target);
-            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-              reportMarkdownActionFailure(
-                { operation: "open-link-in-preview", target },
-                result.cause,
-              );
-            }
-          },
-          openExternal: (target) => api.shell.openExternal(target),
-          copyLink: (target) =>
-            writeTextToClipboard(target, {
-              target: "link",
-              unavailableMessage: msg("Clipboard API is unavailable while copying link."),
-              failureMessage: msg("Failed to copy link to the clipboard."),
-            }),
-          updateThreadLink: updateThreadPullRequestLink,
-          reportFailure: (operation, cause) => {
-            reportMarkdownActionFailure({ operation, target: href }, cause);
-            if (
-              operation === "link-pull-request-to-thread" ||
-              operation === "unlink-pull-request-from-thread"
-            ) {
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title:
-                    operation === "link-pull-request-to-thread"
-                      ? gt("Unable to link pull request")
-                      : gt("Unable to unlink pull request"),
-                  description: thrownErrorMessage(cause, m) ?? gt("The request failed."),
-                }),
-              );
-            }
-          },
-        });
-      };
       const link = (
         <a
           {...props}
@@ -1470,7 +1427,8 @@ const CHAT_MARKDOWN_COMPONENTS = {
               }) !== "app"
             ) {
               // Open desktop Alt-clicks before Chromium downloads them so link routers can read the held key.
-              if (isElectron && event.altKey) {
+              // Editor links also go over IPC: the desktop popup handler only passes web links.
+              if (isElectron && (event.altKey || isLocalEditorFileHref(href))) {
                 event.preventDefault();
                 event.stopPropagation();
                 void readLocalApi()
@@ -1496,20 +1454,78 @@ const CHAT_MARKDOWN_COMPONENTS = {
               void readLocalApi()?.shell.openExternal(href);
             });
           }}
-          onKeyDown={(event) => {
-            if (event.defaultPrevented || !href || !faviconHost) return;
-            if (!(event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) return;
-            // Chromium on macOS sends no contextmenu event for these keys.
+          onAuxClick={(event) => {
+            // A middle-click raises no click event, and the desktop popup handler only passes web links.
+            if (!isElectron || event.button !== 1 || !href || !isLocalEditorFileHref(href)) return;
             event.preventDefault();
-            event.stopPropagation();
-            const bounds = event.currentTarget.getBoundingClientRect();
-            showLinkContextMenu({ x: bounds.left, y: bounds.bottom }, "keyboard");
+            void readLocalApi()
+              ?.shell.openExternal(href)
+              .catch((cause) =>
+                reportMarkdownActionFailure(
+                  { operation: "open-link-external", target: href },
+                  cause,
+                ),
+              );
+          }}
+          onKeyDown={(event) => {
+            if (href && faviconHost) openContextMenuFromKeyboard(event);
           }}
           onContextMenu={(event) => {
             if (!href || !faviconHost) return;
             event.preventDefault();
             event.stopPropagation();
-            showLinkContextMenu({ x: event.clientX, y: event.clientY }, contextMenuSourceOf(event));
+            const api = readLocalApi();
+            if (!api) return;
+            const source = contextMenuSourceOf(event);
+            const threadLinkAction = !canOperateHost
+              ? undefined
+              : linkedThreadPullRequestFor(href) !== null
+                ? "unlink-from-thread"
+                : resolveThreadPullRequest(href) === null
+                  ? undefined
+                  : "link-to-thread";
+            void showExternalLinkContextMenu({
+              href,
+              canOpenInPreview,
+              threadLinkAction,
+              position: { x: event.clientX, y: event.clientY },
+              showContextMenu: (items, position) => api.contextMenu.show(items, position, source),
+              openInPreview: async (target) => {
+                const result = await openExternalLinkInPreview(target);
+                if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+                  reportMarkdownActionFailure(
+                    { operation: "open-link-in-preview", target },
+                    result.cause,
+                  );
+                }
+              },
+              openExternal: (target) => api.shell.openExternal(target),
+              copyLink: (target) =>
+                writeTextToClipboard(target, {
+                  target: "link",
+                  unavailableMessage: msg("Clipboard API is unavailable while copying link."),
+                  failureMessage: msg("Failed to copy link to the clipboard."),
+                }),
+              updateThreadLink: updateThreadPullRequestLink,
+              reportFailure: (operation, cause) => {
+                reportMarkdownActionFailure({ operation, target: href }, cause);
+                if (
+                  operation === "link-pull-request-to-thread" ||
+                  operation === "unlink-pull-request-from-thread"
+                ) {
+                  toastManager.add(
+                    stackedThreadToast({
+                      type: "error",
+                      title:
+                        operation === "link-pull-request-to-thread"
+                          ? gt("Unable to link pull request")
+                          : gt("Unable to unlink pull request"),
+                      description: thrownErrorMessage(cause, m) ?? gt("The request failed."),
+                    }),
+                  );
+                }
+              },
+            });
           }}
         >
           {faviconHost && hasText && !isPullRequestAutolink ? (
