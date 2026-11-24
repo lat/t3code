@@ -3782,7 +3782,11 @@ export default function ChatView(props: ChatViewProps) {
               data-home-hero={showHomeDashboard ? "" : undefined}
               className={
                 isDraftHeroState
-                  ? "pointer-events-none absolute inset-0 z-20 flex items-center [@media(max-height:34rem)]:items-end"
+                  ? cn(
+                      "pointer-events-none absolute inset-0 z-20 flex items-center [@media(max-height:34rem)]:items-end",
+                      // The headline hangs above the stack, outside the centering; reserve its height.
+                      showHomeDashboard && "sm:[@media(min-height:50rem)]:pt-24",
+                    )
                   : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2"
               }
             >

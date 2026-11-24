@@ -474,8 +474,8 @@ function ActivityCard({
       {loading ? (
         <Skeleton className="h-36 w-full" />
       ) : (
-        <div className="my-auto grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 text-3xs text-muted-foreground">
-          <span />
+        // No weekday column: it pushed the cells off center and cost them width. Tooltips name the day.
+        <div className="my-auto flex flex-col text-3xs text-muted-foreground">
           <div className="relative h-4">
             {grid.months.map((month) => (
               <span
@@ -487,16 +487,8 @@ function ActivityCard({
               </span>
             ))}
           </div>
-          <div className="grid grid-rows-7 gap-0.75">
-            {["", "Mon", "", "Wed", "", "Fri", ""].map((label, row) => (
-              // oxlint-disable-next-line react/no-array-index-key -- weekday rows are positional
-              <span key={row} className="flex items-center leading-none">
-                {label}
-              </span>
-            ))}
-          </div>
           <div
-            className="grid grid-flow-col grid-rows-7 gap-0.75"
+            className="grid grid-flow-col grid-rows-7 gap-1"
             style={{ gridTemplateColumns: `repeat(${grid.weeks.length}, minmax(0, 1fr))` }}
           >
             {grid.weeks.flatMap((week, column) =>
