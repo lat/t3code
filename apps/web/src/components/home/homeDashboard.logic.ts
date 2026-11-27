@@ -239,28 +239,6 @@ export function primaryPoolWindow(pool: LimitPool): LimitPoolWindow | null {
   );
 }
 
-/**
- * The window of the primary kind closest to running out, for pools that meter several quotas of
- * one kind side by side (Antigravity's per-family weekly buckets). `include` narrows the quotas
- * considered, such as to Antigravity's Gemini ones.
- */
-export function tightestPoolWindow(
-  pool: LimitPool,
-  include: (window: LimitPoolWindow) => boolean = () => true,
-): LimitPoolWindow | null {
-  const windows = pool.windows.filter(include);
-  const primary = primaryPoolWindow({ ...pool, windows });
-  if (!primary) return null;
-  const usedOf = (window: LimitPoolWindow) =>
-    window.members.reduce(
-      (sum, member, index) => sum + (window.weights[index] ?? 1) * member.window.usedPercent,
-      0,
-    ) / Math.max(1, window.capacity);
-  return windows
-    .filter((window) => window.kind === primary.kind)
-    .reduce((tightest, window) => (usedOf(window) > usedOf(tightest) ? window : tightest), primary);
-}
-
 export interface ActivityCell {
   readonly day: string;
   readonly tokens: number;

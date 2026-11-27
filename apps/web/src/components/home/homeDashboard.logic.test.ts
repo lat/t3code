@@ -1,4 +1,3 @@
-import type { LimitPool, LimitPoolWindow } from "@t3tools/shared/usageLimits";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -8,7 +7,6 @@ import {
   forecastPool,
   formatSpan,
   localDay,
-  tightestPoolWindow,
   tokensBetween,
 } from "./homeDashboard.logic";
 
@@ -153,53 +151,5 @@ describe("formatSpan", () => {
     [3 * DAY, "3d"],
   ])("formats %d ms as %s", (ms, expected) => {
     expect(formatSpan(ms)).toBe(expected);
-  });
-});
-
-describe("tightestPoolWindow", () => {
-  const poolWindow = (
-    id: string,
-    kind: LimitPoolWindow["kind"],
-    usedPercent: number,
-  ): LimitPoolWindow =>
-    ({
-      id,
-      kind,
-      label: id,
-      members: [{ window: { id, kind, label: id, usedPercent } }],
-      weights: [1],
-      capacity: 1,
-      columns: [],
-    }) as unknown as LimitPoolWindow;
-
-  it("charts the most spent weekly quota among several", () => {
-    const pool = {
-      driver: "antigravity",
-      windows: [
-        poolWindow("gemini-5h", "session", 90),
-        poolWindow("gemini-weekly", "weekly", 20),
-        poolWindow("3p-weekly", "weekly", 60),
-      ],
-    } as unknown as LimitPool;
-    expect(tightestPoolWindow(pool)?.id).toBe("3p-weekly");
-  });
-
-  it("charts only the quotas a card includes", () => {
-    const pool = {
-      driver: "antigravity",
-      windows: [
-        poolWindow("gemini-5h", "session", 90),
-        poolWindow("gemini-weekly", "weekly", 20),
-        poolWindow("gemini-argon-weekly", "weekly", 35),
-        poolWindow("3p-weekly", "weekly", 100),
-      ],
-    } as unknown as LimitPool;
-    expect(tightestPoolWindow(pool, (window) => window.id.startsWith("gemini"))?.id).toBe(
-      "gemini-argon-weekly",
-    );
-  });
-
-  it("returns null for a pool without windows", () => {
-    expect(tightestPoolWindow({ windows: [] } as unknown as LimitPool)).toBeNull();
   });
 });

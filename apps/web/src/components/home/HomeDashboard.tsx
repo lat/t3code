@@ -3,12 +3,7 @@ import type { ServerProvider, UsageProviderKind } from "@t3tools/contracts";
 import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
 import { formatTokens, makeWindow } from "@t3tools/shared/usageFormat";
 import type { DailyTotals } from "@t3tools/shared/usageMerge";
-import {
-  antigravityWindowLimitsModel,
-  collectLimitAccounts,
-  collectLimitPools,
-  type LimitPoolWindow,
-} from "@t3tools/shared/usageLimits";
+import { collectLimitAccounts, collectLimitPools } from "@t3tools/shared/usageLimits";
 import { scaleLinear } from "d3-scale";
 import { T, useGT } from "gt-react";
 import { CalendarIcon, ChartLineIcon, GaugeIcon } from "lucide-react";
@@ -44,7 +39,6 @@ import {
   type PoolRunway,
   poolForecastMembers,
   primaryPoolWindow,
-  tightestPoolWindow,
 } from "./homeDashboard.logic";
 
 const HOUR_MS = 3_600_000;
@@ -54,35 +48,16 @@ const ACTIVITY_WEEKS = 13;
 const POOL_HISTORY_MS = 3 * DAY_MS;
 const POOL_FORECAST_MS = 3 * DAY_MS;
 
-interface PoolQuota {
-  /** The quotas this card may chart; the one closest to running out wins. */
-  readonly includes: (window: LimitPoolWindow) => boolean;
-  /** Whether a model's tokens spend the charted quota. */
-  readonly meters: (window: LimitPoolWindow, model: string) => boolean;
-}
-
 interface PoolEntry {
   readonly driver: string;
   readonly provider: UsageProviderKind;
   readonly label: string;
-  readonly quota?: PoolQuota;
 }
 
 // Each pool charts in its provider's series color, as in the Usage legend.
 const POOLS: readonly PoolEntry[] = [
   { driver: "codex", provider: "codex", label: "Codex" },
   { driver: "claudeAgent", provider: "claude", label: "Claude" },
-  // Antigravity meters each model family apart. Claude already has its own card, so this one
-  // charts the Gemini quotas, whichever binds first, against Gemini tokens alone.
-  {
-    driver: "antigravity",
-    provider: "antigravity",
-    label: "Antigravity",
-    quota: {
-      includes: (window) => window.id.startsWith("gemini"),
-      meters: (window, model) => antigravityWindowLimitsModel(window, model),
-    },
-  },
 ];
 
 const SERIES_COLOR: Record<UsageProviderKind, DitherColor> = {
@@ -356,12 +331,10 @@ function PoolCard({
   provider,
   now,
   color,
-  quota,
   formatMoment,
 }: {
   readonly label: string;
   readonly color: SeriesColor;
-  readonly quota: PoolQuota | undefined;
   readonly pool: ReturnType<typeof collectLimitPools>[number] | undefined;
   readonly daily: readonly DailyTotals[];
   readonly provider: UsageProviderKind;
@@ -369,25 +342,10 @@ function PoolCard({
   readonly formatMoment: (at: number) => string;
 }) {
   const gt = useGT();
-  const window = pool
-    ? quota
-      ? tightestPoolWindow(pool, quota.includes)
-      : primaryPoolWindow(pool)
-    : null;
-  // Which quota is charted, when the card picks one of several.
-  const windowName = quota && window ? window.label.split(" · ")[0] : null;
+  const window = pool ? primaryPoolWindow(pool) : null;
   const usage: readonly DayTokens[] = daily.map((entry) => ({
     day: entry.day,
-    tokens:
-      quota && window
-        ? [...entry.byModel.values()].reduce(
-            (sum, model) =>
-              model.provider === provider && quota.meters(window, model.model)
-                ? sum + model.totalTokens
-                : sum,
-            0,
-          )
-        : (entry.byProvider.get(provider)?.totalTokens ?? 0),
+    tokens: entry.byProvider.get(provider)?.totalTokens ?? 0,
   }));
   const from = now - POOL_HISTORY_MS;
   const to = now + POOL_FORECAST_MS;
@@ -408,7 +366,6 @@ function PoolCard({
                   {gt("left of {capacity}", {
                     capacity: formatPoolPercent(forecast.capacityPercent),
                   })}
-                  {windowName ? ` · ${windowName}` : null}
                 </span>
               </p>
               {forecast.nextRefill ? (
@@ -454,9 +411,11 @@ const labelOfDay = (day: string) => activityDayFormat.format(dayStart(day));
 function ActivityCard({
   grid,
   loading,
+  className,
 }: {
   readonly grid: ActivityGrid;
   readonly loading: boolean;
+  readonly className?: string | undefined;
 }) {
   const gt = useGT();
   const describe = (cell: { readonly day: string; readonly tokens: number }) =>
@@ -465,6 +424,7 @@ function ActivityCard({
     <DashboardCard
       icon={<CalendarIcon />}
       title={gt("Activity")}
+      className={className}
       aside={
         grid.totalTokens > 0
           ? gt("{tokens} tokens", { tokens: formatTokens(grid.totalTokens) })
@@ -664,14 +624,14 @@ export function HomeDashboard() {
   const loading = isPending && merged.daily.length === 0;
 
   return (
-    // Pools on top, history below, three a row once the dashboard is wide enough.
+    // Pools first. Two columns: pools, then activity and month usage full width.
+    // Three columns: pools and activity, then month usage full width.
     <div className="@container">
       <div data-home-dashboard className="grid grid-cols-1 gap-3 @lg:grid-cols-2 @2xl:grid-cols-3">
         {POOLS.map((entry) => (
           <PoolCard
             key={entry.driver}
             label={entry.label}
-            quota={entry.quota}
             pool={pools.find((pool) => pool.driver === (entry.driver as ServerProvider["driver"]))}
             daily={merged.daily}
             provider={entry.provider}
@@ -687,11 +647,12 @@ export function HomeDashboard() {
             ACTIVITY_WEEKS,
           )}
           loading={loading}
+          className="@lg:col-span-2 @2xl:col-span-1"
         />
         <UsageCard
           month={buildMonthUsage(merged.daily, today)}
           loading={loading}
-          className="@lg:col-span-2"
+          className="@lg:col-span-2 @2xl:col-span-3"
         />
       </div>
     </div>
